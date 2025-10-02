@@ -6,3 +6,7 @@ pydantic
 chromadb==0.5.5
 sentence-transformers
 numpy
+gunicorn
+flask
+flask-cors
+requests
