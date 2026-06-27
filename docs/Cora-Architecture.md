@@ -23,6 +23,16 @@ Everything the feasibility doc concluded still holds. This document is the *how*
 
 **One-line product:** *a grounded, self-driving discovery engine for the comparative biology of aging.*
 
+### 1.1 Decisions locked (v0.2 — 2026-06-27)
+
+| Decision | Choice | Implication |
+|---|---|---|
+| **First user** | **You / indie researcher** | Cora is a personal discovery copilot first. Run hot and iterate fast; the human is the live calibration partner; candid "here's why it might be wrong" tone over sales polish. De-risks the engine before facing biotech's brutal credibility bar later. |
+| **Primary output** | **Ranked hypothesis briefing** | A ranked feed; each item = hypothesis + convergence evidence + confidence + citations + a proposed (killifish/cell-level) experiment. Ships from Phase 1 (generated on demand) and becomes the autonomous loop's output in Phase 4. |
+| **Graph store** | Neo4j *(proposed default)* | Convergence queries are the moat — use a real graph DB, don't fake them in flat tables. |
+| **Loop** | Hand-rolled thin orchestration *(proposed default)* | The loop is the product; control it directly rather than inherit a heavy framework's abstractions. |
+| **Autonomy loudness** | Scheduled briefing + hot-find ping *(proposed default)* | Not silent, not noisy. |
+
 ---
 
 ## 2. Why aging/longevity is the right first wedge
@@ -216,13 +226,15 @@ LBD's documented weakness is *"easy to generate a plausible link, hard to prove 
 
 ---
 
-## 13. Open design decisions (need a human steer)
+## 13. Design decisions
 
-1. **Output unit** — ranked target list, full per-hypothesis dossiers, or an interactive graph? (drives the whole UI)
-2. **First user** — longevity-biotech target-ID team, academic geroscience lab, or you/indie researcher? (they want different things)
-3. **Graph store** — start typed-relational (Postgres) for speed, or commit to a real graph DB (Neo4j) for the convergence queries that are the moat?
-4. **Build vs. rent the loop** — agent framework (LangGraph etc.) or a hand-rolled orchestration we fully control?
-5. **How loud is "autonomous"** — does it message you when it finds something hot, or only at the scheduled briefing?
+**Locked (see §1.1):** first user = you / indie researcher · primary output = ranked hypothesis briefing.
+
+**Proposed defaults (override anytime):** graph store = Neo4j · loop = hand-rolled orchestration · autonomy = scheduled briefing + hot-find ping.
+
+**Still genuinely open:**
+- **Briefing granularity** — how many hypotheses per briefing, and how deep is one card by default (one-line claim vs. mini-dossier)?
+- **Seed scope** — which species + databases form the Phase-1 corpus? *(Proposal: AnAge / GenAge / DrugAge / LongevityMap + PubMed abstracts for the long-lived set — bowhead whale, Greenland shark, ocean quahog, rockfish, naked mole-rat, hydra, *Turritopsis*, killifish.)*
 
 ---
 
