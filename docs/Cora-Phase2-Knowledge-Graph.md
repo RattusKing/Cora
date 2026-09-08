@@ -4,6 +4,8 @@
 **Status:** Design target — *no code yet.*
 **Parent:** `docs/Cora-Architecture.md` (Phase 2 of §12). Assumes Phase 1's trustworthy card is in place.
 
+> **⚠️ Amended by red-team (2026-09-08).** Corrections applied in place and marked **[RT]**; full findings in `docs/Cora-Red-Team.md`. Key changes: the schema as first written **cannot express a species-specific longevity signal** (a reified `Finding` node fixes it); "pathway-level is stronger" was wrong without a size-matched null; Neo4j is replaced by graph-lite; gene-level orthology is unavailable for 5 of 9 panel species, so **pathway/hallmark-level convergence is the primary product**; the phenotype needs body-mass/temperature covariates. The red-team report wins on conflict.
+
 ---
 
 ## Goal (one sentence)
@@ -34,6 +36,13 @@ Every node resolves to a canonical external ID so entity resolution is tractable
 
 **Edges** (each carries `source_doc[]`, `confidence 0..1`, `license_tag`, `extractor`, `created_at`):
 `has_lifespan · expresses · member_of_ortholog_group · ortholog_of · associated_with_hallmark · in_pathway · extends_lifespan_in · regulates · has_phenotype · evidence_supports · contradicts`
+**[RT] + `longevity_signal_in (Gene → Species, kind)` · `tested_negative` · `not_tested`**
+
+> **[RT] Schema bug — fixed by a reified `Finding` node.** As first written, the flagship query joins `expresses` + `associated_with_hallmark` + `has_phenotype`. But *every* panel species expresses ERCC1/PCNA/FOXO3 orthologs, and Reactome/GO map gene→hallmark identically for every species — so "genomic instability" reaches "≥3 independent lineages" for all eight species on day one, the hot-find ping fires the first night, and "orphan human lever" candidates cannot exist. The graph could not say *"gene G shows a longevity signal **in species S**."*
+>
+> **Fix:** convergence is computed **over `Finding` nodes only**:
+> `Finding { species, entity@level (gene | ortholog_group | pathway), phenotype, direction (gain | loss | up | down | expansion | retained), evidence_tier (dN/dS or CNV < expression < in-vitro function < in-vivo genetic < intervention < human genetics), effect_size, n, method, primary_source, lab, abstract_only }`.
+> A lineage counts toward convergence only if its Finding meets a minimum evidence tier; add a **direction-consistency** term (same direction in ≥3 lineages, else "contested convergence"). CNV/duplication is its own Finding type (lever = *dosage*, which `ortholog_of` collapses to a boolean). Orthology stores **type** (1:1 / 1:many / many:many) and taxonomic level; "orthology unresolved" is a first-class value that zeroes `human_lever_factor`. Gene-level edges are permitted only for the Ensembl-covered species (NMR, killifish, human, hydra) plus HAGR's Bowhead and NMR genome resources — the other five are **"pathway-level only."**
 
 ---
 
@@ -46,7 +55,7 @@ The card's "convergence" field is really **two different, separately-scored clai
 2. **Pathway / hallmark convergence** — *different genes*, but they hit the *same pathway or hallmark*, across lineages.
    *e.g. whale via ERCC1, quahog via a different repair gene — both → "genomic instability" hallmark.*
 
-**Pathway-level convergence is often the *stronger* evidence** that the *mechanism* (not a specific gene) is what matters for longevity — because evolution found the same solution by different molecular routes. Cora must distinguish and score both; conflating them is a credibility bug.
+**[RT] Corrected — pathway-level convergence is the *easiest* signal to get by chance,** not the strongest by default. Reactome "DNA repair" has ~300 genes and "Immune System" ~2,000, so essentially every comparative-genomics gene list (positively selected or expanded genes) hits one — which is why every long-lived-species genome paper "finds DNA repair." It becomes strong evidence that the *mechanism* matters **only after it beats a gene-set-size-matched null and a cross-lineage permutation** (§4; red-team F11). Cora must distinguish and score both levels, each against its own null; conflating them — or privileging pathway-level without a null — is a credibility bug.
 
 ---
 
@@ -60,6 +69,11 @@ The card's "convergence" field is really **two different, separately-scored clai
 - bowhead + another whale → **weak, likely inherited**
 
 Without this, every convergence score is systematically overstated. With it, Cora says something a naive literature-miner can't.
+
+> **[RT] Three scientific corrections to §3–§4.**
+> **(a) The phenotype is confounded.** Greenland shark (1–4 °C, ~1 cm/yr growth), quahog (metabolic depression, anoxia-tolerant), bowhead (Arctic, 60–100 t), deep *Sebastes* — the panel is a **"cold, big, slow"** sample, so raw AnAge maximum lifespan converges on *correlates of a slow life history* (cold-shock proteins — the real bowhead DSB-repair finding is CIRBP, literally *cold-inducible*; protein thermal stability; low mitochondrial ROS), not causes of longevity. Humans (LQ ~4–5) are already extreme for their mass, so "human as anchor" inverts the comparison. Kolora 2021 worked *because* it used 88 closely related species with phylogenetic control — the opposite of eight maximally distant species with no short-lived relatives. **Fix:** phenotype = **residual longevity** (longevity quotient / PGLS residual on log body mass + habitat temperature + class); separate nodes for senescence rate (Gompertz slope), regenerative capacity, and cancer resistance (hydra's constant mortality, *Turritopsis* transdifferentiation and NMR non-aging mortality are categorically different things); Environment attributes on Species; a **confound critic** ("does this mechanism track temperature/mass better than residual longevity?"); within-lineage **short-lived contrasts** (short-lived *Sebastes*, *T. rubra*, *H. oligactis*, *Mercenaria*, mouse) and a **non-cold high-LQ control** (Brandt's bat LQ ~10, birds).
+> **(b) Divergence time does not establish trait independence.** A TimeTree weight *saturates* — every cross-phylum pair (>500 My) gets full weight, so for this panel it only separates *Sebastes* from *Sebastes*. Independence is a property of the *trait*: what matters is whether extreme longevity **arose on that branch** — **ancestral-state reconstruction** of residual longevity on the species tree, counting independent *gains*. And **direction is never modeled**: somatic telomerase is active in fish and cnidarians and was *repressed* in mammals, so much panel "convergence" may be **retention of an ancestral state** with humans as the derived, short-lived oddity — a different hypothesis with a different human lever. Score "ancestral retention" as its own class.
+> **(c) Publication and assay bias game the score.** NMR has thousands of aging papers, the Greenland shark a few dozen; quahog edges are almost entirely oxidative stress (what a physiology lab can measure on a clam); "pathway convergence" therefore recovers the map of which assays each lab could run. **Fix:** count **primary studies and independent labs**, never review mentions (reviews become pointers with a provenance chain — "N documents / **M independent observations**"); add `tested_negative` / `not_tested` and compute convergence as positives-over-tests with Bayesian shrinkage; normalize by per-species corpus size; a **permutation null** (shuffle mechanism labels preserving per-species edge counts) reported as **empirical FDR on every card**; a **subtractive contradiction term** in `convergence_score` (5-for/4-against must not score like 5-for/0); ordinal evidence bands, not 0–1 decimals; ingest retractions/errata with forced re-verification.
 
 ---
 
@@ -149,7 +163,9 @@ corpus (P1) ─► (a) NER: tag gene / species / phenotype / pathway mentions
 
 | Concern | Choice |
 |---|---|
-| Graph DB | **Neo4j** (locked default) |
+| Graph DB | ~~Neo4j~~ **[RT] SQLite `edges(src, rel, dst, source_doc, quote, confidence, license, extractor, created_at)` + NetworkX/pandas**, Neo4j-shaped schema; pulled *into P1*. Migrate past ~10⁶ edges. |
+| Entity resolution | **[RT] PubTator3 bulk** (NCBI Gene/Taxonomy-normalized); tree-based orthology (OrthoFinder/eggNOG) for invertebrates; BUSCO + contamination screen gates every presence/absence edge |
+| Phenotype covariates | **[RT] TimeTree + body mass + habitat temperature + class** (for residual longevity, §3) |
 | Orthology | Ensembl Compara / OrthoDB (+ OrthoFinder if needed) |
 | Species tree / divergence times | TimeTree import |
 | Extraction | frontier model for relation extraction; cheap model for NER/triage |

@@ -4,6 +4,8 @@
 **Status:** Design draft — *no code yet.* This is the "solid approach" we iterate on before building.
 **Builds on:** `docs/Cora-Feasibility-Research.md` (keeps all its constraints) and the existing backend skeleton.
 
+> **⚠️ Amended by red-team (2026-09-08).** Four adversarial reviews (scientific, engineering, product, trust/safety) found material errors and re-sequenced the roadmap. Corrections are applied in place below and marked **[RT]**; the full findings and fixes are in `docs/Cora-Red-Team.md`. Where this doc and the red-team report disagree, the red-team report wins.
+
 ---
 
 ## 0. What changed since the feasibility doc
@@ -29,9 +31,10 @@ Everything the feasibility doc concluded still holds. This document is the *how*
 |---|---|---|
 | **First user** | **You / indie researcher** | Cora is a personal discovery copilot first. Run hot and iterate fast; the human is the live calibration partner; candid "here's why it might be wrong" tone over sales polish. De-risks the engine before facing biotech's brutal credibility bar later. |
 | **Primary output** | **Ranked hypothesis briefing** | A ranked feed; each item = hypothesis + convergence evidence + confidence + citations + a proposed (killifish/cell-level) experiment. Ships from Phase 1 (generated on demand) and becomes the autonomous loop's output in Phase 4. |
-| **Graph store** | Neo4j *(proposed default)* | Convergence queries are the moat — use a real graph DB, don't fake them in flat tables. |
+| **Graph store** | **[RT] SQLite + NetworkX ("graph-lite"), Neo4j-shaped schema** | Neo4j was premature: the graph is ~10³–10⁴ edges, the scoring functions are Python regardless of store, and Aura's free tier auto-pauses (a hazard for unattended jobs). Graph-lite moves *into P1*. Migrate only past ~10⁶ edges or when interactive graph exploration becomes a product requirement. |
 | **Loop** | Hand-rolled thin orchestration *(proposed default)* | The loop is the product; control it directly rather than inherit a heavy framework's abstractions. |
-| **Autonomy loudness** | Scheduled briefing + hot-find ping *(proposed default)* | Not silent, not noisy. |
+| **Autonomy loudness** | **[RT] Weekly briefing, cadence = evidence rate; hot-find ping deferred** | The panel gains ~1.5 aging abstracts/week, so a daily briefing has nothing daily to say. The ping ships only after a strong-convergence event has occurred *organically* at least once. |
+| **[RT] Sequencing rule** | **P0.5 first; no new spec until the previous phase has been *used*** | Eleven weeks of specs and zero lines of Phase 1 is the failure mode. A two-week P0.5 (3 species, one model, mechanical citation gate, JSON ledger) is used daily for 14 days before anything else is designed. |
 
 ---
 
@@ -39,7 +42,7 @@ Everything the feasibility doc concluded still holds. This document is the *how*
 
 | Advantage | Detail |
 |---|---|
-| **Structured data already exists** | HAGR suite — **AnAge** (lifespans, ~4,000+ species), **GenAge** (aging genes), **DrugAge** (lifespan-extending compounds), **LongevityMap** (human variants). Most trait axes have no such DB; aging does. Lowers the Layer-1 cost dramatically. |
+| **Structured data already exists** | HAGR suite — **AnAge** (lifespans, ~4,000+ species), **GenAge** (aging genes), **DrugAge** (lifespan-extending compounds), **LongevityMap** (human variants). Most trait axes have no such DB; aging does. **[RT] Caveat:** this holds for *lifespans* (AnAge). GenAge/DrugAge contain **zero genes for any non-human panel species** — they are the *human anchor*, not a panel mechanism source. Panel mechanisms must be extracted from ~816 abstracts (PubTator3 for entity resolution), and gene-level orthology exists for only 4 of 9 species. |
 | **Believer-buyers** | Longevity biotech already bought the comparative-biology thesis — Calico hired the naked-mole-rat lab; Altos ($3B), Retro ($1B), NewLimit, BioAge. They *want* "what does the 500-yr shark know." Softens the feasibility doc's "thin market" risk. |
 | **A rigorous scaffold exists** | The **12 Hallmarks of Aging** (López-Otín 2023) give the AI a principled structure to organize every finding, instead of ad-hoc links. |
 | **Proof-of-method already published** | Kolora et al., *Science* 2021 — comparative genomics across 88 rockfish (11–205 yr lifespans) pulled out DNA-repair + immune longevity genes. That paper *is* a hand-built version of one Cora query. |
@@ -164,7 +167,7 @@ The KG is what lets Cora answer *"which DNA-repair gene is independently associa
 
 LBD's documented weakness is *"easy to generate a plausible link, hard to prove it's true."* Cora's credibility depends on measuring this:
 
-1. **Retrospective rediscovery (headline eval).** Freeze the corpus to pre-2015; measure whether Cora re-derives the rockfish DNA-repair finding (2021), naked-mole-rat HA, etc. *Re-discovering known breakthroughs from older data = proof-of-value + demo + regression test in one.*
+1. **Retrospective rediscovery (headline eval) — [RT] contaminated as written; all four reviews flagged it.** The frontier model has *read* Kolora 2021, Tian 2013, Keane 2015 and every review citing them — freezing the corpus does not freeze weights. Worse, the gold answers are **absent from the frozen corpus** (bowhead × aging ≤2014 = 5 abstracts; NMR × hyaluronan ≤2012 = 0), so a "hit" is recitation; and "DNA repair" is a free pass (1,349 pre-2014 abstracts). **Fixed form:** a mandatory **closed-book baseline** (empty corpus — only the delta counts, and any claim whose supporting fact isn't in the frozen corpus *fails*); gold items **published after the model's training cutoff**, re-selected on every model upgrade; freeze by `edat` and snapshot raw XML; a **registered negative set** (retracted/refuted findings — does it "rediscover" those too?); **synthetic held-out associations** with fictitious gene symbols; "unprompted" scored against a random-order null over ≥100 AnAge species; **prospective preregistration** (log hypotheses now, score in 12 months). Never claim "Cora rediscovered X" without the closed-book control attached. The eval also moves to the **P2 gate** — it justifies the *graph*, not the card.
 2. **Held-out association precision/recall.** Hide known gene↔longevity links; measure how many Cora surfaces.
 3. **Citation faithfulness.** % of claims with a valid, retrievable, on-point source. Drive fabrication → 0.
 4. **Calibration.** Does stated confidence match hit rate?
@@ -215,14 +218,20 @@ LBD's documented weakness is *"easy to generate a plausible link, hard to prove 
 
 ---
 
-## 12. Phased roadmap (sequence, not code)
+## 12. Phased roadmap (sequence, not code) — **[RT] revised to v0.3**
 
-- **Phase 0 — now:** lock this architecture + data-source list + eval definitions. *(this doc)*
-- **Phase 1 — Trustworthy retrieval:** real aging corpus + grounded, citation-verified RAG + honest guardrails + the retrospective-eval harness. Single-shot Q&A, *no loop yet.*
-- **Phase 2 — The graph:** build the KG + convergence detection (the differentiator).
-- **Phase 3 — The loop:** curiosity → generate → critique → ground → rank → ledger, at autonomy **L1**.
-- **Phase 4 — Autonomy:** memory/consolidation + experiment design + **L2 morning briefing**.
-- **Phase 5 — Scale:** broaden corpus; push toward **L3** as eval earns it.
+*Original sequence (P1 card → P2 graph → P3 loop → P4 autonomy → P5 scale) is superseded. Value was five phases deep, the curiosity engine was premature for an ~816-abstract corpus, and the gates were self-computed. Full detail: `docs/Cora-Red-Team.md` §5.*
+
+| Phase | What it now is | Gate |
+|---|---|---|
+| **P0.5 — two weeks** | 3 species · one model · mechanical citation gate (PMID resolves + exact-substring quote) · JSON/SQLite ledger · `desk_check` + `next_action` on the card · three user metrics. **Before any generation:** verifier gold set (150–300 labeled pairs) + closed-book baseline. | **Used every day for 14 days**; ≥1 card left Cora |
+| **P1 — trustworthy card + graph-lite** | Full panel (816 abstracts + HAGR, no human mining) · PubTator3 ER · SQLite + NetworkX graph with the `Finding` node · ordinal evidence bands · citation lineage · cross-family verifier + structured entailment · canaries + control-limit breaker · structured dedupe · orchestration tables + Batches + $5/run cap · biomedical embedder + BM25 · taxon-ID queries · injection defenses + trust tiers · sixth (safety) critic · license propagation. | Verifier FNR published; per-edge FPR < 2 % before any convergence score is shown |
+| **P2 — convergence, honestly** | Residual longevity + covariates + confound critic + short-lived contrasts · pathway/hallmark-level primary with size-matched null + permutation FDR · ancestral-state independence + direction · `human_lever` with direction/safety · model-selection matrix · hallmarks multi-label. | The **fixed** rediscovery eval (closed-book delta, post-cutoff gold, negative set, synthetic held-out): graph convergence beats the P1 baseline |
+| **P3 — scheduled sweep** | **Exhaustive, prioritized, weekly sweep** of the species × mechanism grid · re-check ledger vs new ingest · explicit steering rules · bounded autonomy ("3 questions/week, you pick one") · briefing as the unit of verification · breaker on system signals + canaries. | Sweep complete; weekly briefing used 4 weeks running; sycophancy index flat |
+| **P4 — consolidation** *(deferred until >200 ledger entries)* | `derived_facts` / `conjectures` split · hot-find ping only after a strong-convergence event has occurred organically. | Unattended month; 100 % mechanical trace-check + stratified human support sample |
+| **P5 — curiosity** | Realized-gain bandit over candidate types, tractability as a hard gate — **only when the frontier (all AnAge species above a threshold) exceeds the budget.** | Cora's proposed question beats the user's own, consistently |
+
+**Standing rule: no new spec until the previous phase has been *used*, not just built.**
 
 ---
 

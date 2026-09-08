@@ -4,6 +4,8 @@
 **Status:** Design target — *no code yet.*
 **Parent:** `docs/Cora-Architecture.md` (Phase 4 of §12). Assumes P1–P3 in place: trustworthy card, graph + convergence, self-propelling loop at L1.
 
+> **⚠️ Amended by red-team (2026-09-08).** Corrections applied in place and marked **[RT]**; full findings in `docs/Cora-Red-Team.md`. Key changes: cadence is **weekly, driven by evidence rate** (not nightly); consolidation is **deferred until >200 ledger entries**; "Reflect" creates claims and must be split into `derived_facts` vs `conjectures`; the **briefing artifact, not the card, is the unit of verification**; the hot-find ping waits for a strong-convergence event to occur organically. The red-team report wins on conflict.
+
 ---
 
 ## Goal (one sentence)
@@ -46,6 +48,10 @@ Consolidation **cannot create claims** — it can only compress claims that alre
 
 Originals are **immutable**; summaries are *derived views*, periodically re-derived from source to prevent compression drift.
 
+> **[RT] Two corrections to this section.**
+> **(a) Deferred.** With ~816 abstracts the ledger stays small; below **~200 entries the ledger *is* semantic memory** and consolidation has nothing to compress — it would become exactly the laundering machine this rule fears. Consolidation ships only past that threshold.
+> **(b) "Reflect" creates claims, so the no-laundering rule as written was honor-system.** "Generate higher-level insights across cycles" asserts what no single source states; its derivation IDs point at *hypotheses* and the summary drops their modality; and §2 placed such summaries *above* the evidence in every later context window — a closed positive-feedback loop (three weak DNA-repair hypotheses → "recurring theme: DNA repair" → the sweep over-samples DNA repair → "DNA repair is the primary convergent mechanism," sourced to twelve hypothesis IDs and zero papers). **Fix:** split memory into **`derived_facts`** — a lossless restatement of ≥1 verified claim, mechanically re-gated by re-running the citation check on the summary sentence against the union of its sources — and **`conjectures`** — Reflect output, which never appears in a briefing as a statement, never sits above evidence in working memory, and influences prioritization only with a capped, decaying weight. Every summary sentence inherits the **modality of its weakest input** (a summary of hypotheses is a hypothesis). Reflections may not cite reflections. The sampled audit becomes **100 % mechanical trace-checking plus a stratified human *support* sample.**
+
 ---
 
 ## 2. Working-memory assembly (context engineering)
@@ -76,7 +82,9 @@ A ranked, **hard-capped** document (top-N; N is a config, default small). Sectio
 
 **Inline feedback affordances** on every item: `accept · reject · redirect · dig deeper` → flow to the ledger and the P3 taste-learning path.
 
-**A missing briefing is itself an alert.** If the morning briefing doesn't arrive, something failed overnight — the absence is the signal, so silent failure can't hide.
+**A missing briefing is itself an alert.** If the morning briefing doesn't arrive, something failed overnight — the absence is the signal, so silent failure can't hide. **[RT]** The failed process cannot report its own absence: an **external dead-man's switch** (a healthcheck ping *from* the briefing job) is what actually notices.
+
+> **[RT] The briefing artifact — not the card — is the unit of verification.** The citation gate covers card claims and edges, but "What changed … and *why*" (ranked first), "why it's here," contradictions prose, frontier rationale and Reflect insights are none of those — so "no ungrounded claim reaches the briefing" was false by construction. **Fix:** every sentence in a briefing is one of (a) a **verified claim ID** with its citation, (b) a **computed-value ID** (metric or score + query hash), or (c) visibly-styled **"unverified narrative"** excluded from all trust metrics. "What changed" is **templated from a structured diff** over IDs (rank delta, edge added, critic verdict changed) — no free prose. Internal re-scoring never counts as a change.
 
 ---
 
@@ -91,6 +99,8 @@ The ping exists for the rare thing that shouldn't wait until morning. It must be
 - the **circuit breaker trips** *(a halt, not a find — different channel, always delivered)*
 
 **Ping budget:** default max **1 non-critical ping per day**; excess candidates roll into the morning briefing. The director can raise or lower the budget. Circuit-breaker halts are exempt.
+
+> **[RT] Deferred, and two guards added.** The ping ships only after a strong-convergence event has occurred *organically* at least once — otherwise it's a feature for an event that has never happened. When it does ship: **(a)** a ping requires **full-text** support and ≥1 **primary** observation per lineage — abstract-only or review-echo support can never trigger it; **(b)** **provenance trust tiers** — a preprint or auto-ingested document can never *alone* raise an edge above provisional, contribute to a ping, or be sole support for a promoted edge (the prompt-injection defense: an attacker's bioRxiv post must not be able to wake you at 3 am, nor deliberately spike the fabrication rate to trip the breaker, which — being exempt from the budget — is a guaranteed-delivery channel). A resolved contradiction is a ping trigger **only** when resolved by a human or a new primary result, never by an LLM-only verdict.
 
 ---
 
@@ -112,7 +122,7 @@ Every control action is logged to episodic memory and feeds taste learning — s
 
 ## 6. Scheduling & budget
 
-- **Cycle cadence** — configurable (e.g., several cycles overnight); each cycle bounded by the P3 per-cycle budget.
+- **Cycle cadence** — **[RT] weekly, driven by evidence rate.** The non-human panel gains ~1.5 aging abstracts per week; nightly cycles over a static corpus produce re-scoring jitter, not news. A run fires when something *evidence-caused* moved, or weekly, whichever first. Each run bounded by the P3 per-run budget ($5/run hard cap).
 - **Daily budget** — hard cap across cycles; the loop stops for the day when spent, and says so in the briefing.
 - **Consolidation** — once nightly, after cycles, before the briefing.
 - **Briefing time** — configurable; delivery via the UI, later optional channels (email / Slack).

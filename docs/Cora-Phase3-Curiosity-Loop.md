@@ -4,6 +4,8 @@
 **Status:** Design target — *no code yet.*
 **Parent:** `docs/Cora-Architecture.md` (Phase 3 of §12). Assumes P1 (trustworthy card) and P2 (graph + convergence) are in place.
 
+> **⚠️ Amended by red-team (2026-09-08).** Corrections applied in place and marked **[RT]**; full findings in `docs/Cora-Red-Team.md`. Key changes: the corpus is ~816 abstracts and the frontier is ~108 cells, so the **curiosity scorer is deferred to P5** and Phase 3 becomes an **exhaustive, prioritized, weekly sweep**; the curiosity formula had a units bug; "taste learning" is replaced by explicit steering rules; the breaker must never trip on human silence. The red-team report wins on conflict.
+
 ---
 
 ## Goal (one sentence)
@@ -55,7 +57,18 @@ The curiosity engine doesn't invent questions from nothing. It **reads the Phase
 ## 2. The curiosity score (intrinsic reward, formal sketch)
 
 ```
-curiosity(c) = novelty(c) × info_gain(c) × relevance(c) × tractability(c)  −  cost(c)
+[RT — the formula below had a units bug (a product of [0,1] terms minus a token count is always
+ negative) and an uncomputable info_gain. Corrected form:]
+
+  gate:      tractability(c) ≥ 15 retrievable passages      // HARD GATE, not a factor
+  priority:  novelty(c) × realized_gain(type(c)) × relevance(c)
+             // realized_gain = a bandit over candidate types; reward = measured ledger change
+             //   (rank movement, edge-confidence delta) × human acceptance, from the episodic log
+  cost:      enforced as a per-run budget ($5/run hard cap) — never a score term
+
+[RT — and the whole scorer is DEFERRED TO P5. With ~816 abstracts the frontier is ~108 cells
+ (9 species × 12 hallmarks): Phase 3 is an EXHAUSTIVE, PRIORITIZED, WEEKLY SWEEP of that grid.
+ Curiosity scoring earns its keep only when frontier > budget.]
 ```
 
 | Term | Meaning | Guards against |
@@ -108,6 +121,8 @@ At Phase 3 scale the critic can't be one prompt. It's **five distinct roles**, e
 
 Then the **Phase 1 citation gate** (step 5) — every claim cited or killed. The critics judge *reasoning*; the gate judges *sourcing*. Both must pass.
 
+> **[RT] Five critics, one brain — fixed.** Five prompts to the same model family are a persona menu, not independent review: shared pretraining priors, shared popular-science contamination ("immortal lobster"), shared hedge-insensitivity, self-preference bias. **Fixes:** (1) the **verifier and the Overclaim critic run on a different model family** from the generator, with cross-family disagreement rate logged as a first-class metric; (2) a **non-LLM mechanical critic layer** runs first — exact-substring quote check against a hashed passage snapshot, cited doc-ID == passage doc-ID, taxon-ID match, gene-symbol resolution, direction-of-effect, primary-vs-review flag, date sanity — and can fail a card without any model's opinion; (3) the verifier's output is **structured, not boolean** — `{supported: yes | partial | no, claim_strength vs source_strength: weaker | equal | stronger, evidence_type, species + population match}` — and **"stronger" auto-fails** (this is what catches *"ERCC1 expansion **drives** longevity"* verified against *"…**suggesting a possible role**…"*); (4) a **sixth critic — dual-use / safety** — with a written taxonomy (refuse / redact-with-rationale / escalate) and its own eval set, run before anything surfaces; (5) a **confound critic** (does the mechanism track temperature/mass better than residual longevity? — P2 §3). Falsifiability becomes a **binary gate**, removed from the score and the tight card.
+
 ---
 
 ## 5. Episodic memory — don't repeat yourself, learn taste
@@ -115,7 +130,8 @@ Then the **Phase 1 citation gate** (step 5) — every claim cited or killed. The
 Every cycle logs: candidates considered (+ scores), hypotheses generated, critic verdicts, ground results, **human feedback**. Two jobs:
 
 1. **Dedupe** — feeds `novelty` so the same question isn't asked twice.
-2. **Taste learning** — if the director keeps rejecting a *class* of hypothesis (e.g. single-gene claims from annotation-sparse species), the curiosity scorer **downweights that class**. This is how "self-motivated" learns *what the human actually finds valuable* rather than optimizing its own idea of interesting.
+2. ~~**Taste learning**~~ **[RT] Replaced by explicit steering rules.** Inferred taste fails four ways at once: one director yields ~50–100 labels a month (no class can be defined from that); acceptance measures agreement with one person's priors, so real learning and pure sycophancy are indistinguishable by the design's own metric; the spec's own example ("reject single-gene claims from sparse species") formally trains the loop to *abandon quahog, shark and Turritopsis* — the species the project exists for; and human silence over a weekend would have read as rejection.
+   **Instead:** ~5 **director-written, editable rules** (min independent lineages · exclude species with <N abstracts · hallmark focus · gene-vs-pathway · species watch-list), shown on every card as "why you're seeing this." Learned weights only after >500 labels. Any preference signal influences **ordering/attention only** — never groundedness, verification, or confidence — and may downweight a *claim-quality class*, **never a species class**; a fixed sweep quota is reserved for sparse species. Feedback is split **reject: wrong** vs **reject: uninteresting** (only the former may inform the truth pipeline; neither reaches the verifier). Each briefing carries a floor of un-preference-weighted slots and a small **blinded probe** (items of known truth status) so a **sycophancy index** — does acceptance track truth or valence? — is published beside acceptance rate.
 
 Full memory tiers + nightly consolidation are Phase 4. Phase 3 needs only the episodic log and the feedback→scorer path.
 
@@ -151,7 +167,7 @@ The loop **pauses itself and pings the director** if any of these trip:
 - fabrication rate > threshold (the anti-Galactica tripwire)
 - critic survival rate collapses (generation gone bad) *or* spikes (critic gone lax)
 - cost per cycle exceeds budget
-- N consecutive cycles surface nothing the human accepts
+- ~~N consecutive cycles surface nothing the human accepts~~ **[RT] removed** — it punished disengagement (a quiet weekend read as rejection) *and* disagreement (sustained correct-but-unwelcome output). **Human silence is no signal.** The breaker trips on **system signals only**, and on **canaries**: every run injects known-fabricated, known-supported, hedge-stripped, wrong-species and injected-passage items — a surviving canary trips the breaker immediately (an *absolute* tripwire, since the other conditions are change-detectors blind to a constant bias). Thresholds are **control limits** (rolling baseline ± 3σ over the last 20 runs), re-baselined and version-stamped on any prompt or model change. Sustained *100 %* acceptance is the alarming case.
 
 **Autonomy with a kill switch it pulls on itself.** This is what makes "as autonomous as possible" safe to actually turn on.
 
