@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.venv/
+dist/
+build/
+
+# Cora local data: the SQLite DB and raw PubMed XML snapshots are NOT committed
+# (license-aware: PubMed abstracts carry no per-record reuse license).
+# The corpus manifest (PMID list + download date) IS committed for reproducibility.
+data/*
+!data/.gitkeep
+!data/manifest.json
+
+# Generated eval files contain full abstract text - keep them local, label them locally.
+eval/verifier_gold_candidates.jsonl
+eval/closed_book_results.jsonl

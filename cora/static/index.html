@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cora</title>
+<style>
+  :root { --bg:#f7f6f2; --ink:#1d1d1b; --muted:#6b6a64; --line:#dcd9cf; --card:#ffffff; --ok:#2f7a4f; --warn:#a8631f; --bad:#a83a2f; --accent:#1f4f8a; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { padding:18px 24px; border-bottom:1px solid var(--line); display:flex; gap:24px; align-items:baseline; flex-wrap:wrap; }
+  header h1 { margin:0; font-size:20px; letter-spacing:.02em; }
+  header .sub { color:var(--muted); font-size:13px; }
+  main { max-width:980px; margin:0 auto; padding:20px 24px 60px; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+  input[type=text] { flex:1; min-width:280px; padding:10px 12px; border:1px solid var(--line); border-radius:8px; font-size:15px; background:#fff; }
+  button { padding:8px 12px; border:1px solid var(--line); border-radius:8px; background:#fff; cursor:pointer; font-size:13px; }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  button:disabled { opacity:.5; cursor:default; }
+  .species label { margin-right:10px; font-size:13px; color:var(--muted); }
+  .metrics { display:flex; gap:18px; flex-wrap:wrap; font-size:13px; color:var(--muted); margin:10px 0 18px; }
+  .metrics b { color:var(--ink); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin:12px 0; }
+  .card .pattern { font-weight:600; font-size:15px; margin-bottom:6px; }
+  .card .quote { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:13px; background:#faf9f4; border-left:3px solid var(--line); padding:6px 10px; margin:6px 0; white-space:pre-wrap; }
+  .card .meta { color:var(--muted); font-size:13px; }
+  .card .band { display:inline-block; padding:2px 8px; border-radius:999px; border:1px solid var(--line); font-size:12px; margin-right:6px; }
+  .card .flag { color:var(--warn); }
+  .card .state { color:var(--muted); font-size:12px; }
+  .card .actions { margin-top:10px; display:flex; gap:6px; flex-wrap:wrap; }
+  .card details { margin-top:8px; }
+  .ev { font-size:13px; margin:4px 0 4px 12px; }
+  .dropped { color:var(--bad); font-size:12px; }
+  pre.export { background:#faf9f4; border:1px dashed var(--line); padding:10px; white-space:pre-wrap; font-size:13px; }
+  .err { color:var(--bad); font-size:13px; margin-top:8px; }
+  .checkin { margin-top:30px; padding-top:14px; border-top:1px solid var(--line); color:var(--muted); font-size:13px; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Cora</h1>
+  <span class="sub">citation-gated hypothesis cards · comparative biology of aging · P0.5</span>
+</header>
+<main>
+  <form id="ask" class="row">
+    <input type="text" id="q" placeholder="e.g. DNA repair and extreme lifespan" required>
+    <button class="primary" id="go">Ask</button>
+    <label style="font-size:13px;color:var(--muted)"><input type="checkbox" id="mock"> mock drafter (no API key)</label>
+  </form>
+  <div class="species row" id="species"></div>
+  <div class="err" id="err"></div>
+  <div class="metrics" id="metrics"></div>
+  <div id="cards"></div>
+  <div class="checkin">
+    Weekly check-in — did Cora tell you something you used?
+    <button onclick="checkin(true)">yes</button> <button onclick="checkin(false)">no</button>
+  </div>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let SPECIES = [];
+
+async function api(path, opts) {
+  const r = await fetch(path, Object.assign({headers:{'content-type':'application/json'}}, opts||{}));
+  const j = await r.json().catch(()=>({}));
+  if (!r.ok) throw new Error(j.detail || r.statusText);
+  return j;
+}
+
+async function loadSpecies() {
+  const s = await api('/api/species');
+  SPECIES = s.species;
+  $('#species').innerHTML = s.species.map(x =>
+    `<label><input type="checkbox" name="sp" value="${x.key}" ${s.default.includes(x.key)?'checked':''}> ${esc(x.name)} <span style="opacity:.6">(${x.docs})</span></label>`).join('');
+}
+
+function selectedSpecies() { return [...document.querySelectorAll('input[name=sp]:checked')].map(i => i.value); }
+
+async function loadMetrics() {
+  const m = await api('/api/metrics');
+  $('#metrics').innerHTML =
+    `<span>corpus <b>${m.corpus.total_docs}</b> abstracts</span>` +
+    `<span>cards <b>${m.cards.total}</b> (grounded <b>${m.cards.grounded}</b>)</span>` +
+    `<span>gate fabrication rate <b>${(m.gate.fabrication_rate*100).toFixed(0)}%</b> over ${m.gate.items} quotes</span>` +
+    `<span>days opened <b>${m.user.days_opened}</b></span>` +
+    `<span>cards that left Cora <b>${m.user.cards_left_cora}</b></span>`;
+}
+
+function strongestQuote(card) {
+  if (!card.draft.evidence.length) return null;
+  return card.draft.evidence.reduce((a,b) => b.quote.length > a.quote.length ? b : a);
+}
+
+function renderCard(row) {
+  const c = row.card, docs = row.docs || {};
+  const q = strongestQuote(c);
+  const title = q && docs[q.pmid] ? docs[q.pmid].title : '';
+  const state = row.state ? ` · ${esc(row.state)}` : '';
+  const dup = row.duplicate_of ? ` · duplicate of ${esc(row.duplicate_of)}` : '';
+  return `<div class="card" id="card-${c.id}">
+    <div class="state">${c.id}${state}${dup}</div>
+    <div class="pattern">${esc(c.draft.pattern)}</div>
+    ${q ? `<div class="quote">“${esc(q.quote)}”<br><span class="meta">— <a target="_blank" href="https://pubmed.ncbi.nlm.nih.gov/${esc(q.pmid)}/">PMID ${esc(q.pmid)}</a> ${esc(title)}</span></div>`
+        : `<div class="quote dropped">no quote survived the gate</div>`}
+    <div class="meta"><b>against:</b> ${esc(c.draft.objection)}</div>
+    ${c.draft.nearest_prior_pmid ? `<div class="meta"><b>vs</b> PMID ${esc(c.draft.nearest_prior_pmid)}: ${esc(c.draft.nearest_prior_note)}</div>` : ''}
+    <div class="meta" style="margin-top:6px"><span class="band">${esc(c.evidence_band.label)}</span>
+      <span class="band">gate ${c.gate.n_passed}/${c.gate.n_items}</span>
+      ${c.flags.map(f=>`<span class="band flag">${esc(f)}</span>`).join('')}</div>
+    ${c.why_seeing_this.length ? `<div class="meta">why: ${esc(c.why_seeing_this.join('; '))}</div>` : ''}
+    <div class="meta"><b>desk check:</b> ${esc(c.draft.desk_check.step)}</div>
+    <details ontoggle="if(this.open) expand('${c.id}')"><summary>evidence</summary><div id="ev-${c.id}">loading…</div></details>
+    <div class="actions">
+      <button onclick="fb('${c.id}','accept')">accept</button>
+      <button onclick="fb('${c.id}','reject:wrong')">reject: wrong</button>
+      <button onclick="fb('${c.id}','reject:uninteresting')">reject: uninteresting</button>
+      <button onclick="fb('${c.id}','dig_deeper')">dig deeper</button>
+      <button onclick="exp('${c.id}')">export draft</button>
+    </div>
+    <div id="out-${c.id}"></div>
+  </div>`;
+}
+
+async function loadLedger() {
+  const rows = await api('/api/ledger');
+  $('#cards').innerHTML = rows.length ? rows.map(renderCard).join('') : '<p class="meta">Ledger is empty. Ask something.</p>';
+}
+
+async function expand(id) {
+  const r = await api(`/api/card/${id}`);
+  const c = r.card, docs = r.docs || {};
+  let html = c.draft.evidence.map(e => {
+    const d = docs[e.pmid] || {};
+    return `<div class="ev">• <a target="_blank" href="https://pubmed.ncbi.nlm.nih.gov/${esc(e.pmid)}/">PMID ${esc(e.pmid)}</a> (${esc(d.pub_year||'?')}; ${esc((d.species||[]).join(', '))}) — “${esc(e.quote)}”</div>`;
+  }).join('');
+  if (c.gate.failed.length) html += c.gate.failed.map(f => `<div class="ev dropped">dropped [${esc(f.reason)}] PMID ${esc(f.pmid)}: “${esc(f.quote.slice(0,120))}”</div>`).join('');
+  const h = c.draft.human_lever;
+  html += `<div class="ev meta">human lever: gene=${esc(h.gene)} direction=${esc(h.direction)} type=${esc(h.lever_type)} — ${esc(h.note)}</div>`;
+  $(`#ev-${id}`).innerHTML = html;
+  loadMetrics();
+}
+
+async function fb(id, verdict) {
+  await api(`/api/card/${id}/feedback`, {method:'POST', body: JSON.stringify({verdict})});
+  await loadLedger(); await loadMetrics();
+}
+
+async function exp(id) {
+  const r = await api(`/api/card/${id}/export`, {method:'POST'});
+  $(`#out-${id}`).innerHTML = `<pre class="export">${esc(r.draft)}</pre>`;
+  loadMetrics();
+}
+
+async function checkin(useful) {
+  await api('/api/checkin', {method:'POST', body: JSON.stringify({useful})});
+  alert('recorded');
+}
+
+$('#ask').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  $('#err').textContent = '';
+  $('#go').disabled = true;
+  try {
+    await api('/api/ask', {method:'POST', body: JSON.stringify({query: $('#q').value, species: selectedSpecies(), mock: $('#mock').checked})});
+    await loadLedger(); await loadMetrics();
+  } catch (e) { $('#err').textContent = e.message; }
+  $('#go').disabled = false;
+});
+
+loadSpecies(); loadMetrics(); loadLedger();
+</script>
+</body>
+</html>
