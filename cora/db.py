@@ -66,6 +66,20 @@ CREATE TABLE IF NOT EXISTS gate_log (
     reasons    TEXT,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS pattern_log (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    card_id      TEXT,
+    judged       INTEGER NOT NULL,
+    judge_model  TEXT,
+    supported    TEXT,
+    strength     TEXT,
+    passed       INTEGER NOT NULL,
+    reason       TEXT,
+    retried      INTEGER NOT NULL,
+    disagreement INTEGER NOT NULL,
+    mechanical_flags TEXT,
+    created_at   TEXT NOT NULL
+);
 """
 
 
@@ -170,6 +184,18 @@ def log_event(conn: sqlite3.Connection, kind: str, payload: dict | None = None) 
     conn.execute(
         "INSERT INTO events (kind, payload, created_at) VALUES (?, ?, ?)",
         (kind, json.dumps(payload) if payload is not None else None, now_iso()),
+    )
+    conn.commit()
+
+
+def log_pattern(conn: sqlite3.Connection, card_id: str | None, pc) -> None:
+    conn.execute(
+        """INSERT INTO pattern_log (card_id, judged, judge_model, supported, strength, passed, reason, retried, disagreement, mechanical_flags, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            card_id, int(pc.judged), pc.judge_model, pc.supported, pc.strength, int(pc.passed), pc.reason,
+            int(pc.retried), int(pc.disagreement), json.dumps(pc.mechanical_strong_words), now_iso(),
+        ),
     )
     conn.commit()
 

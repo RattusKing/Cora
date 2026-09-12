@@ -10,7 +10,15 @@ cora evalset --n 150        # writes eval/verifier_gold_candidates.jsonl (UNLABE
 ```
 
 Each line is `{id, kind, expected, claim, pmid, passage, label: null, notes}`.
-**A human fills `label`** with `supports` or `not_supports` after reading the passage.
+**A human fills `label`** with `supports` or `not_supports` after reading the passage:
+
+```
+cora label                  # blind: kind/expected are hidden; s / n / u(skip) / q(quit); saves after each answer
+cora label --reveal         # show the generator's kind/expected after each answer
+cora label --stats          # label counts, kind x label crosstab, mechanical-gate baseline
+cora label --score-judge    # the model judge's precision / recall / false-negative rate (needs credentials)
+cora label --score-judge --mock   # same for the mock judge (no credentials)
+```
 `expected` is only what the generator intended (it built the hard negatives by stripping
 hedges, inflating claim strength, altering a word, or attributing a real sentence to the
 wrong paper) — the human label is the truth, and the two will sometimes disagree. That is

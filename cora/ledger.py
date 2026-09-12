@@ -42,11 +42,13 @@ def get_row(conn, card_id: str):
 
 
 def list_cards(conn, include_archived: bool = False, limit: int = 50) -> list[dict]:
-    """Ranked: verified species, then groundedness, then recency. Duplicates and archived
-    entries are demoted, not removed."""
+    """Ranked: verified species, then groundedness, then recency. Archived entries, cards
+    whose pattern failed its check, and duplicates are demoted, never removed."""
     rows = conn.execute(
         """SELECT * FROM ledger
-           ORDER BY (state = 'archived') ASC, (duplicate_of IS NOT NULL) ASC,
+           ORDER BY (state = 'archived') ASC,
+                    (state IN ('overclaim', 'unsupported', 'ungrounded')) ASC,
+                    (duplicate_of IS NOT NULL) ASC,
                     n_species DESC, groundedness DESC, n_verified DESC, created_at DESC
            LIMIT ?""",
         (limit,),

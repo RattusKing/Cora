@@ -23,6 +23,10 @@ def test_ask_ledger_feedback_export_metrics(client):
     assert r.status_code == 200, r.text
     card = r.json()["card"]
     assert card["gate"]["groundedness"] == 1.0
+    assert card["pattern_check"]["passed"] and card["pattern_check"]["judged"]
+
+    r2 = client.post("/api/ask", json={"query": "longevity lifespan", "mock": True, "judge": False})
+    assert r2.status_code == 200 and not r2.json()["card"]["pattern_check"]["judged"]
 
     rows = client.get("/api/ledger").json()
     assert rows and rows[0]["card"]["id"] == card["id"] and "tight" in rows[0]

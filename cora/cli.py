@@ -1,4 +1,4 @@
-"""cora - command line interface for P0.5."""
+"""cora - command line interface."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from . import config, db, generate, ledger, metrics
 from .card import export_draft, render_tight
 from .gate import make_canaries, run_canaries
 from .llm import get_llm
+from .verify import get_judge
 
 
 def _conn(args):
@@ -22,6 +23,7 @@ def cmd_init(args):
     conn = _conn(args)
     print(f"database ready: {getattr(args, 'db', None) or config.DB_PATH}")
     print("species (default):", ", ".join(config.DEFAULT_SPECIES))
+    print(f"drafter: {config.DEFAULT_MODEL}   judge: {config.JUDGE_MODEL}   pattern retries: {config.PATTERN_RETRIES}")
     conn.close()
 
 
@@ -40,20 +42,35 @@ def cmd_ingest(args):
     conn.close()
 
 
+def _credential_hint(e: Exception) -> str:
+    name = type(e).__name__
+    if "Authentication" in name or "PermissionDenied" in name:
+        return f"model call failed: {e}\n(set ANTHROPIC_API_KEY or run `ant auth login`; or use --mock)"
+    return ""
+
+
 def cmd_ask(args):
     conn = _conn(args)
     try:
         llm = get_llm(mock=args.mock)
     except Exception as e:  # SDK import / client construction problems
         sys.exit(f"could not create model client: {e}\n(use --mock, or set ANTHROPIC_API_KEY / `ant auth login`)")
+    judge = None
+    if not args.no_judge:
+        try:
+            judge = get_judge(mock=args.mock, drafter_model=getattr(llm, "model", None), model=args.judge_model)
+        except ValueError as e:
+            sys.exit(str(e))
+        except Exception as e:
+            sys.exit(f"could not create judge client: {e}\n(use --no-judge for the mechanical check only, or --mock)")
     try:
-        card = generate.ask(conn, args.query, species_keys=args.species, llm=llm, k=args.k)
+        card = generate.ask(conn, args.query, species_keys=args.species, llm=llm, judge=judge, k=args.k, use_judge=not args.no_judge)
     except generate.NoEvidence as e:
         sys.exit(str(e))
     except Exception as e:
-        name = type(e).__name__
-        if "Authentication" in name or "PermissionDenied" in name:
-            sys.exit(f"model call failed: {e}\n(set ANTHROPIC_API_KEY or run `ant auth login`; or use --mock)")
+        hint = _credential_hint(e)
+        if hint:
+            sys.exit(hint)
         raise
     docs_map = db.docs_by_pmid(conn, [e.pmid for e in card.draft.evidence])
     print(render_tight(card, docs_map))
@@ -61,6 +78,14 @@ def cmd_ask(args):
     print(f"\n  gate    {g.n_passed}/{g.n_items} quotes verified · fabrication rate {g.fabrication_rate:.0%}")
     for f in g.failed:
         print(f"          dropped [{f['reason']}] PMID {f['pmid']}: \"{f['quote'][:70]}\"")
+    pc = card.pattern_check
+    if pc is not None:
+        if pc.retried:
+            print(f"  pattern rewritten once; original: \"{pc.original_pattern}\"")
+        if not pc.passed:
+            print(f"  status  {card.status.upper()} - {pc.rationale}")
+        if pc.disagreement:
+            print(f"  note    mechanical strength flags {pc.mechanical_strong_words} disagree with the judge's verdict ({pc.strength})")
     conn.close()
 
 
@@ -94,6 +119,12 @@ def cmd_show(args):
         print("  dropped by the gate:")
         for f in card.gate.failed:
             print(f"   - [{f['reason']}] PMID {f['pmid']}: \"{f['quote'][:90]}\"")
+    pc = card.pattern_check
+    if pc is not None:
+        print(f"  pattern check: passed={pc.passed} judged={pc.judged} judge={pc.judge_model} supported={pc.supported} strength={pc.strength} reason={pc.reason}")
+        print(f"    rationale: {pc.rationale}")
+        if pc.retried:
+            print(f"    original pattern: \"{pc.original_pattern}\"")
     hl = card.draft.human_lever
     print(f"  human lever: gene={hl.gene} direction={hl.direction} type={hl.lever_type} - {hl.note}")
     conn.close()
@@ -114,6 +145,8 @@ def cmd_export(args):
     card = ledger.get(conn, args.id)
     if card is None:
         sys.exit(f"no card {args.id}")
+    if card.status != "gated":
+        print(f"warning: card status is {card.status}; the export is marked accordingly", file=sys.stderr)
     docs_map = db.docs_by_pmid(conn, [e.pmid for e in card.draft.evidence])
     ledger.mark_exported(conn, args.id)
     print(export_draft(card, docs_map))
@@ -129,9 +162,9 @@ def cmd_canary(args):
     result = run_canaries({d["pmid"]: d for d in docs}, canaries)
     db.log_event(conn, "canary", {k: v for k, v in result.items() if k != "misses"})
     print(json.dumps(result, indent=1))
+    conn.close()
     if not result["ok"]:
         sys.exit(2)
-    conn.close()
 
 
 def cmd_metrics(args):
@@ -152,8 +185,35 @@ def cmd_evalset(args):
 
     conn = _conn(args)
     path = evalset.write_verifier_candidates(conn, n=args.n, out=args.out)
-    print(f"wrote verifier candidates to {path} - label them by hand (see eval/README.md)")
+    print(f"wrote verifier candidates to {path} - label them with `cora label` (see eval/README.md)")
     conn.close()
+
+
+def cmd_label(args):
+    from . import label as lab
+
+    if args.stats or args.score_judge:
+        rows = lab.load_rows(args.file)
+        print(json.dumps(lab.stats(rows), indent=1))
+        if any(r.get("label") in lab.LABELS for r in rows):
+            print("mechanical gate baseline:", json.dumps(lab.score_mechanical_gate(args.file), indent=1))
+        else:
+            print("no labels yet - run `cora label` first")
+        if args.score_judge:
+            try:
+                judge = get_judge(mock=args.mock, model=args.judge_model)
+            except Exception as e:
+                sys.exit(f"could not create judge client: {e}\n(use --mock, or set ANTHROPIC_API_KEY / `ant auth login`)")
+            try:
+                print("judge:", json.dumps(lab.score_judge(rows, judge), indent=1))
+            except Exception as e:
+                hint = _credential_hint(e)
+                sys.exit(hint or f"judge scoring failed: {e}")
+        return
+    try:
+        lab.label_loop(args.file, reveal=args.reveal, only_unlabeled=not args.relabel)
+    except FileNotFoundError as e:
+        sys.exit(str(e))
 
 
 def cmd_serve(args):
@@ -165,7 +225,7 @@ def cmd_serve(args):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="cora", description="Cora P0.5 - citation-gated hypothesis cards")
+    p = argparse.ArgumentParser(prog="cora", description="Cora - citation-gated hypothesis cards")
     p.add_argument("--db", help=f"SQLite path (default {config.DB_PATH})")
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -178,7 +238,9 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("ask", help="draft one gated card for a query")
     s.add_argument("query")
     s.add_argument("--species", nargs="*")
-    s.add_argument("--mock", action="store_true", help="use the deterministic mock drafter (no API key needed)")
+    s.add_argument("--mock", action="store_true", help="use the deterministic mock drafter and judge (no API key needed)")
+    s.add_argument("--no-judge", action="store_true", help="skip the model judge; only the mechanical pattern check runs")
+    s.add_argument("--judge-model", default=None, help=f"judge model (default {config.JUDGE_MODEL}; must differ from the drafter)")
     s.add_argument("--k", type=int, default=None, help="passages to retrieve")
     s.set_defaults(fn=cmd_ask)
 
@@ -216,6 +278,16 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--n", type=int, default=60)
     s.add_argument("--out", default="eval/verifier_gold_candidates.jsonl")
     s.set_defaults(fn=cmd_evalset)
+
+    s = sub.add_parser("label", help="blind-label the verifier gold candidates; --stats / --score-judge to score")
+    s.add_argument("--file", default="eval/verifier_gold_candidates.jsonl")
+    s.add_argument("--reveal", action="store_true", help="show the generator's kind/expected after each answer")
+    s.add_argument("--relabel", action="store_true", help="revisit already-labeled pairs too")
+    s.add_argument("--stats", action="store_true", help="print label counts and the mechanical-gate baseline")
+    s.add_argument("--score-judge", action="store_true", help="score the model judge against the labels (implies --stats)")
+    s.add_argument("--judge-model", default=None)
+    s.add_argument("--mock", action="store_true", help="score the mock judge instead (no API key needed)")
+    s.set_defaults(fn=cmd_label)
 
     s = sub.add_parser("serve", help="run the web UI")
     s.add_argument("--host", default="127.0.0.1")

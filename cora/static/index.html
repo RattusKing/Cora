@@ -47,6 +47,7 @@
     <input type="text" id="q" placeholder="e.g. DNA repair and extreme lifespan" required>
     <button class="primary" id="go">Ask</button>
     <label style="font-size:13px;color:var(--muted)"><input type="checkbox" id="mock"> mock drafter (no API key)</label>
+    <label style="font-size:13px;color:var(--muted)"><input type="checkbox" id="judge" checked> judge the pattern</label>
   </form>
   <div class="species row" id="species"></div>
   <div class="err" id="err"></div>
@@ -109,6 +110,9 @@ function renderCard(row) {
     <div class="meta" style="margin-top:6px"><span class="band">${esc(c.evidence_band.label)}</span>
       <span class="band">gate ${c.gate.n_passed}/${c.gate.n_items}</span>
       ${c.flags.map(f=>`<span class="band flag">${esc(f)}</span>`).join('')}</div>
+    ${c.pattern_check ? (c.pattern_check.passed
+        ? `<div class="meta">check: pass (${esc(c.pattern_check.judge_model || 'mechanical only')})${c.pattern_check.judged ? ` supported=${esc(c.pattern_check.supported)} strength=${esc(c.pattern_check.strength)}` : ''}${c.pattern_check.retried ? ' · pattern rewritten once' : ''}</div>`
+        : `<div class="meta dropped">check FAIL [${esc(c.pattern_check.reason)}]: ${esc(c.pattern_check.rationale)}</div>`) : ''}
     ${c.why_seeing_this.length ? `<div class="meta">why: ${esc(c.why_seeing_this.join('; '))}</div>` : ''}
     <div class="meta"><b>desk check:</b> ${esc(c.draft.desk_check.step)}</div>
     <details ontoggle="if(this.open) expand('${c.id}')"><summary>evidence</summary><div id="ev-${c.id}">loading…</div></details>
@@ -163,7 +167,7 @@ $('#ask').addEventListener('submit', async ev => {
   $('#err').textContent = '';
   $('#go').disabled = true;
   try {
-    await api('/api/ask', {method:'POST', body: JSON.stringify({query: $('#q').value, species: selectedSpecies(), mock: $('#mock').checked})});
+    await api('/api/ask', {method:'POST', body: JSON.stringify({query: $('#q').value, species: selectedSpecies(), mock: $('#mock').checked, judge: $('#judge').checked})});
     await loadLedger(); await loadMetrics();
   } catch (e) { $('#err').textContent = e.message; }
   $('#go').disabled = false;

@@ -15,6 +15,28 @@ from pathlib import Path
 # citation gate that decides what survives is mechanical (see cora/gate.py).
 DEFAULT_MODEL = os.environ.get("CORA_MODEL", "claude-opus-5")
 
+# The judge that checks the pattern line against the verified quotes (cora/verify.py).
+# It must be a different model than the drafter so their blind spots are not shared.
+JUDGE_MODEL = os.environ.get("CORA_JUDGE_MODEL", "claude-sonnet-5")
+JUDGE_MODEL_EXPLICIT = "CORA_JUDGE_MODEL" in os.environ
+# How many times the drafter may rewrite a pattern the judge called "stronger" (0 = never).
+PATTERN_RETRIES = int(os.environ.get("CORA_PATTERN_RETRIES", "1"))
+
+# Strong/causal words: flagged mechanically when they appear in a pattern but in none of
+# its verified quotes. The judge decides; the flag is recorded and compared with its verdict.
+STRONG_WORDS = [
+    "causes", "cause", "caused", "causal", "causally",
+    "drives", "drive", "driven",
+    "proves", "prove", "proven", "proof",
+    "demonstrates", "demonstrate", "demonstrated",
+    "establishes", "establish", "established",
+    "confirms", "confirm", "confirmed",
+    "determines", "determine", "determined",
+    "required for", "necessary for", "sufficient for", "responsible for",
+    "leads to", "results in", "directly",
+    "definitively", "conclusively", "unequivocally",
+]
+
 
 @dataclass(frozen=True)
 class Species:
