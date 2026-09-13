@@ -54,9 +54,12 @@ def compute(conn) -> dict:
         "runs": rc["runs"], "last_run": rc["last_run"], "new_abstracts": rc["new_abstracts"],
         "cards_touched": rc["cards_touched"], "source_flags": rc["flags"], "unseen_updates": unseen,
     }
+    g_rows = conn.execute("SELECT extractor, COUNT(*) AS n FROM findings GROUP BY extractor").fetchall()
+    graph_stats = {"findings": sum(r["n"] for r in g_rows), "by_extractor": {r["extractor"]: r["n"] for r in g_rows}}
     return {
         "pattern_check": pattern_stats,
         "recheck": recheck_stats,
+        "graph": graph_stats,
         "corpus": {"docs_by_species": docs, "total_docs": conn.execute("SELECT COUNT(*) AS n FROM docs").fetchone()["n"]},
         "cards": {"total": n_cards, "grounded": n_grounded, "duplicates": n_dupes},
         "gate": {

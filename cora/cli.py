@@ -276,6 +276,42 @@ def cmd_species(args):
     conn.close()
 
 
+def cmd_graph(args):
+    from . import graph
+
+    conn = _conn(args)
+    if args.graph_cmd == "build":
+        try:
+            extractor = graph.get_extractor(mock=not args.model, model=args.extract_model)
+        except Exception as e:
+            sys.exit(f"could not create extractor: {e}\n(omit --model to use the lexicon extractor, which needs no credentials)")
+        try:
+            stats = graph.build(conn, extractor, species_keys=args.species, log=print)
+        except Exception as e:
+            hint = _credential_hint(e)
+            sys.exit(hint or f"graph build failed: {e}")
+        print(json.dumps({k: v for k, v in stats.items() if k != "by_mechanism"}, indent=1))
+        print("findings by mechanism:", json.dumps(stats["by_mechanism"]))
+        if stats["docs_without_pub_types"]:
+            print(f"note: {stats['docs_without_pub_types']} docs have no publication types (ingested before this feature); re-run `cora ingest` to refresh them so reviews can be separated from primary studies")
+    elif args.graph_cmd == "converge":
+        if graph.findings_count(conn) == 0:
+            sys.exit("no findings yet - run `cora graph build` first")
+        rows = graph.converge(conn, min_tier=args.min_tier, perms=args.perms, extractor=args.extractor)
+        print(graph.render_convergence(rows, min_lineages=args.min_lineages))
+    elif args.graph_cmd == "show":
+        rows = graph.mechanism_detail(conn, args.mechanism, extractor=args.extractor)
+        if not rows:
+            sys.exit(f"no findings for mechanism {args.mechanism!r}; known: {', '.join(graph.MECHANISMS)}")
+        spec = graph.MECHANISMS.get(args.mechanism, {})
+        print(f"{args.mechanism} - {spec.get('label', '')}  hallmarks: {', '.join(spec.get('hallmarks', [])) or 'unassigned'}")
+        for r in rows:
+            d = f" {r['direction']}" if r["direction"] else ""
+            print(f"  [{r['species_key']}] {r['tier']}{d} · {r['evidence_type']} · PMID {r['pmid']} ({r['pub_year'] or '?'})")
+            print(f"      \"{r['quote'][:200]}\"")
+    conn.close()
+
+
 def cmd_serve(args):
     import uvicorn
 
@@ -361,6 +397,22 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(fn=cmd_anage)
 
     sub.add_parser("species", help="the panel: docs per species, AnAge max longevity with quality/sample/origin, naive LQ").set_defaults(fn=cmd_species)
+
+    g = sub.add_parser("graph", help="graph-lite: extract findings and compute mechanism-level convergence across the panel")
+    gsub = g.add_subparsers(dest="graph_cmd", required=True)
+    gb = gsub.add_parser("build", help="extract findings from every abstract (lexicon by default; --model uses the model extractor)")
+    gb.add_argument("--species", nargs="*")
+    gb.add_argument("--model", action="store_true", help="use the model extractor (needs credentials); quotes still go through the gate")
+    gb.add_argument("--extract-model", default=None, help=f"model for --model (default {config.JUDGE_MODEL})")
+    gc = gsub.add_parser("converge", help="mechanisms ranked by independent lineages, with a permutation p-value")
+    gc.add_argument("--min-tier", default="mention", choices=["mention", "association", "intervention"])
+    gc.add_argument("--min-lineages", type=int, default=2)
+    gc.add_argument("--perms", type=int, default=None, help=f"permutations (default {config.GRAPH_PERMUTATIONS})")
+    gc.add_argument("--extractor", default=None, help="restrict to one extractor's findings")
+    gs = gsub.add_parser("show", help="every finding for one mechanism, per species, with its verbatim quote")
+    gs.add_argument("mechanism")
+    gs.add_argument("--extractor", default=None)
+    g.set_defaults(fn=cmd_graph)
 
     s = sub.add_parser("serve", help="run the web UI")
     s.add_argument("--host", default="127.0.0.1")

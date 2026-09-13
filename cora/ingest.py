@@ -91,9 +91,13 @@ def parse_pubmed_xml(xml_text: str, keep_empty: bool = False) -> list[dict]:
             parts.append(f"{label}: {body}" if label else body)
         abstract = " ".join(parts).strip()
         flags: list[str] = []
+        pub_types: list[str] = []
         for pt in art.findall("MedlineCitation/Article/PublicationTypeList/PublicationType"):
-            if "retract" in (pt.text or "").lower():
-                flags.append(f"pubtype:{pt.text}")
+            name = (pt.text or "").strip()
+            if name:
+                pub_types.append(name)
+            if "retract" in name.lower():
+                flags.append(f"pubtype:{name}")
         for cc in art.findall("MedlineCitation/CommentsCorrectionsList/CommentsCorrections"):
             rt = cc.get("RefType")
             if rt in FLAG_REF_TYPES:
@@ -121,6 +125,7 @@ def parse_pubmed_xml(xml_text: str, keep_empty: bool = False) -> list[dict]:
                 "pub_year": int(year) if year and year.isdigit() else None,
                 "entrez_date": entrez,
                 "flags": flags,
+                "pub_types": pub_types,
             }
         )
     return docs

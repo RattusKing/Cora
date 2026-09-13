@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cora"
-version = "0.0.8"
+version = "0.0.9"
 description = "Cora P0.5 - a grounded, citation-gated hypothesis-card tool for the comparative biology of aging"
 readme = "README.md"
 requires-python = ">=3.10"

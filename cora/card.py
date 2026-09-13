@@ -105,6 +105,7 @@ class Card(BaseModel):
     next_action: NextAction = "desk_check"
     status: str = "gated"  # gated | ungrounded | overclaim | unsupported
     pattern_check: PatternCheck | None = None
+    convergence: list[dict] | None = None  # graph-lite rows for mechanisms the pattern names (computed)
 
 
 # --- helpers ---------------------------------------------------------------
@@ -181,6 +182,10 @@ def render_tight(card: Card, docs_by_pmid: dict[str, dict]) -> str:
     if card.draft.nearest_prior_pmid:
         lines.append(f"  vs      PMID {card.draft.nearest_prior_pmid}: {card.draft.nearest_prior_note}")
     lines.append(f"  band    {card.evidence_band.label}")
+    for cv in (card.convergence or [])[:2]:
+        p = f" · p_perm {cv['p_perm']:.2f}" if cv.get("p_perm") is not None else ""
+        neg = f" · {cv['n_negative']} negative" if cv.get("n_negative") else ""
+        lines.append(f"  conv    {cv['label']}: {cv['n_species']} species · {cv['n_lineages']} lineages ({', '.join(cv['lineages'])}){p}{neg}")
     pc = card.pattern_check
     if pc is not None:
         if pc.passed:
