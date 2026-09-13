@@ -116,9 +116,14 @@ _KEY_STOP = {
 }
 
 
+def pattern_tokens(pattern: str) -> set[str]:
+    """The salient tokens of a pattern (used for the dedupe key and for re-check matching)."""
+    return {t for t in _WORD.findall((pattern or "").lower()) if t not in _KEY_STOP and len(t) > 3}
+
+
 def dedupe_key(pattern: str, species_keys: list[str]) -> str:
     """Structured-ish key: the salient tokens of the pattern + the species set."""
-    toks = sorted({t for t in _WORD.findall(pattern.lower()) if t not in _KEY_STOP and len(t) > 3})
+    toks = sorted(pattern_tokens(pattern))
     basis = "|".join(toks[:12]) + "||" + ",".join(sorted(species_keys))
     return hashlib.sha1(basis.encode("utf-8")).hexdigest()[:16]
 

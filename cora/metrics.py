@@ -44,8 +44,19 @@ def compute(conn) -> dict:
         "mechanical_vs_judge_disagreement_rate": (p["disagreement"] / p["judged"]) if p["judged"] else 0.0,
         "failure_reasons": p_reasons,
     }
+    rc = conn.execute(
+        """SELECT COUNT(*) AS runs, MAX(created_at) AS last_run, COALESCE(SUM(n_new),0) AS new_abstracts,
+                  COALESCE(SUM(n_cards_touched),0) AS cards_touched, COALESCE(SUM(n_flags),0) AS flags
+           FROM recheck_log"""
+    ).fetchone()
+    unseen = sum(db.unseen_update_counts(conn).values())
+    recheck_stats = {
+        "runs": rc["runs"], "last_run": rc["last_run"], "new_abstracts": rc["new_abstracts"],
+        "cards_touched": rc["cards_touched"], "source_flags": rc["flags"], "unseen_updates": unseen,
+    }
     return {
         "pattern_check": pattern_stats,
+        "recheck": recheck_stats,
         "corpus": {"docs_by_species": docs, "total_docs": conn.execute("SELECT COUNT(*) AS n FROM docs").fetchone()["n"]},
         "cards": {"total": n_cards, "grounded": n_grounded, "duplicates": n_dupes},
         "gate": {

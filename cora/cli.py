@@ -19,6 +19,10 @@ def _conn(args):
     return conn
 
 
+def _quiet(*a, **k):
+    pass
+
+
 def cmd_init(args):
     conn = _conn(args)
     print(f"database ready: {getattr(args, 'db', None) or config.DB_PATH}")
@@ -27,18 +31,43 @@ def cmd_init(args):
     conn.close()
 
 
+def _validate_species(keys):
+    for k in keys:
+        if k not in config.SPECIES:
+            sys.exit(f"unknown species key {k!r}; known: {', '.join(config.SPECIES)}")
+
+
 def cmd_ingest(args):
     from . import ingest
 
     conn = _conn(args)
     keys = args.species or config.DEFAULT_SPECIES
-    for k in keys:
-        if k not in config.SPECIES:
-            sys.exit(f"unknown species key {k!r}; known: {', '.join(config.SPECIES)}")
+    _validate_species(keys)
     results = ingest.ingest_all(conn, keys)
     for r in results:
         print(f"{r['species']}: {r['stored']} abstracts stored ({r['dropped_no_abstract']} had no abstract)")
     print(f"manifest: {config.MANIFEST_PATH}")
+    conn.close()
+
+
+def cmd_recheck(args):
+    from . import recheck
+
+    conn = _conn(args)
+    if args.report:
+        report = recheck.last_report(conn)
+        if report is None:
+            print("no re-check has run yet")
+        else:
+            cards = {r["card"].id: r["card"] for r in ledger.list_cards(conn, include_archived=False, limit=10000)}
+            print(recheck.render_report(report, cards))
+        conn.close()
+        return
+    keys = args.species or config.DEFAULT_SPECIES
+    _validate_species(keys)
+    report = recheck.run(conn, keys, k=args.k, log=print if args.verbose else _quiet)
+    cards = {r["card"].id: r["card"] for r in ledger.list_cards(conn, include_archived=False, limit=10000)}
+    print(recheck.render_report(report, cards))
     conn.close()
 
 
@@ -97,7 +126,7 @@ def cmd_ledger(args):
     for r in rows:
         card = r["card"]
         docs_map = db.docs_by_pmid(conn, [e.pmid for e in card.draft.evidence])
-        tag = f" [{r['state']}]" + (f" (dup of {r['duplicate_of']})" if r["duplicate_of"] else "")
+        tag = f" [{r['state']}]" + (f" (dup of {r['duplicate_of']})" if r["duplicate_of"] else "") + (f" new+{r['new_evidence']}" if r["new_evidence"] else "")
         print(render_tight(card, docs_map).replace(f"[{card.id}]", f"[{card.id}]{tag}", 1))
         print()
     conn.close()
@@ -108,13 +137,15 @@ def cmd_show(args):
     card = ledger.get(conn, args.id)
     if card is None:
         sys.exit(f"no card {args.id}")
+    updates = db.card_updates(conn, args.id)
     ledger.mark_expanded(conn, args.id)
     docs_map = db.docs_by_pmid(conn, [e.pmid for e in card.draft.evidence])
     print(render_tight(card, docs_map))
     print("\n  evidence (gate-verified):")
     for e in card.draft.evidence:
         d = docs_map.get(e.pmid, {})
-        print(f"   - PMID {e.pmid} ({d.get('pub_year') or '?'}; {', '.join(d.get('species', []))}): \"{e.quote}\"")
+        flag = f"  !! {', '.join(d['flags'])}" if d.get("flags") else ""
+        print(f"   - PMID {e.pmid} ({d.get('pub_year') or '?'}; {', '.join(d.get('species', []))}): \"{e.quote}\"{flag}")
     if card.gate.failed:
         print("  dropped by the gate:")
         for f in card.gate.failed:
@@ -125,6 +156,10 @@ def cmd_show(args):
         print(f"    rationale: {pc.rationale}")
         if pc.retried:
             print(f"    original pattern: \"{pc.original_pattern}\"")
+    if updates:
+        print("  what changed since this card was made:")
+        for u in updates:
+            print(f"   - {u['created_at'][:10]} PMID {u['pmid']}: {u['reason']}")
     hl = card.draft.human_lever
     print(f"  human lever: gene={hl.gene} direction={hl.direction} type={hl.lever_type} - {hl.note}")
     conn.close()
@@ -231,9 +266,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("init", help="create the database").set_defaults(fn=cmd_init)
 
-    s = sub.add_parser("ingest", help="fetch PubMed abstracts for the species panel")
+    s = sub.add_parser("ingest", help="fetch ALL PubMed abstracts for the species panel")
     s.add_argument("--species", nargs="*", help=f"species keys (default: {' '.join(config.DEFAULT_SPECIES)})")
     s.set_defaults(fn=cmd_ingest)
+
+    s = sub.add_parser("recheck", help="fetch only new abstracts, flag retracted/corrected sources, report what changed per card")
+    s.add_argument("--species", nargs="*")
+    s.add_argument("--k", type=int, default=5, help="a new abstract 'touches' a card if it ranks in the top k for the card's query")
+    s.add_argument("--report", action="store_true", help="print the last report without fetching")
+    s.add_argument("--verbose", action="store_true")
+    s.set_defaults(fn=cmd_recheck)
 
     s = sub.add_parser("ask", help="draft one gated card for a query")
     s.add_argument("query")
@@ -249,7 +291,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--limit", type=int, default=50)
     s.set_defaults(fn=cmd_ledger)
 
-    s = sub.add_parser("show", help="expand a card (full evidence)")
+    s = sub.add_parser("show", help="expand a card (full evidence, what changed)")
     s.add_argument("id")
     s.set_defaults(fn=cmd_show)
 

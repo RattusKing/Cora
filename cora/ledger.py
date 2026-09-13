@@ -43,7 +43,8 @@ def get_row(conn, card_id: str):
 
 def list_cards(conn, include_archived: bool = False, limit: int = 50) -> list[dict]:
     """Ranked: verified species, then groundedness, then recency. Archived entries, cards
-    whose pattern failed its check, and duplicates are demoted, never removed."""
+    whose pattern failed its check, and duplicates are demoted, never removed. Each row
+    carries `new_evidence`: unseen touches from the re-check."""
     rows = conn.execute(
         """SELECT * FROM ledger
            ORDER BY (state = 'archived') ASC,
@@ -53,11 +54,17 @@ def list_cards(conn, include_archived: bool = False, limit: int = 50) -> list[di
            LIMIT ?""",
         (limit,),
     ).fetchall()
+    unseen = db.unseen_update_counts(conn)
     out = []
     for r in rows:
         if r["state"] == "archived" and not include_archived:
             continue
-        out.append({"card": _row_to_card(r), "state": r["state"], "duplicate_of": r["duplicate_of"], "expanded": r["expanded"], "exported": r["exported"]})
+        out.append(
+            {
+                "card": _row_to_card(r), "state": r["state"], "duplicate_of": r["duplicate_of"],
+                "expanded": r["expanded"], "exported": r["exported"], "new_evidence": unseen.get(r["id"], 0),
+            }
+        )
     return out
 
 
@@ -77,6 +84,7 @@ def feedback(conn, card_id: str, verdict: str, reason: str | None = None) -> Non
 
 def mark_expanded(conn, card_id: str) -> None:
     conn.execute("UPDATE ledger SET expanded = 1 WHERE id = ?", (card_id,))
+    db.mark_updates_seen(conn, card_id)
     db.log_event(conn, "expanded", {"card_id": card_id})
 
 
