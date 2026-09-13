@@ -73,6 +73,24 @@ class EvidenceBand(BaseModel):
     label: str
 
 
+class PatternCheck(BaseModel):
+    """Result of checking the pattern line against the verified quotes (cora/verify.py)."""
+
+    mechanical_strong_words: list[str] = []
+    judged: bool = False
+    judge_model: str | None = None
+    supported: str | None = None  # yes | partial | no
+    strength: str | None = None  # weaker | equal | stronger
+    evidence_type: str | None = None
+    species_match: bool | None = None
+    rationale: str = ""
+    passed: bool
+    reason: str | None = None  # stronger | unsupported | strong_language_no_judge | no_verified_quotes
+    retried: bool = False
+    original_pattern: str | None = None
+    disagreement: bool = False  # mechanical flag and judge verdict disagree
+
+
 class Card(BaseModel):
     id: str
     created_at: str
@@ -85,7 +103,8 @@ class Card(BaseModel):
     flags: list[str]
     dedupe_key: str
     next_action: NextAction = "desk_check"
-    status: str = "gated"
+    status: str = "gated"  # gated | ungrounded | overclaim | unsupported
+    pattern_check: PatternCheck | None = None
 
 
 # --- helpers ---------------------------------------------------------------
@@ -157,6 +176,14 @@ def render_tight(card: Card, docs_by_pmid: dict[str, dict]) -> str:
     if card.draft.nearest_prior_pmid:
         lines.append(f"  vs      PMID {card.draft.nearest_prior_pmid}: {card.draft.nearest_prior_note}")
     lines.append(f"  band    {card.evidence_band.label}")
+    pc = card.pattern_check
+    if pc is not None:
+        if pc.passed:
+            who = pc.judge_model or "mechanical only"
+            detail = f"supported={pc.supported} strength={pc.strength}" if pc.judged else "no strong language beyond the quotes"
+            lines.append(f"  check   pass ({who}): {detail}" + (" · pattern rewritten once" if pc.retried else ""))
+        else:
+            lines.append(f"  check   FAIL [{pc.reason}]: {pc.rationale[:140]}")
     if card.why_seeing_this:
         lines.append("  why     " + "; ".join(card.why_seeing_this))
     if card.flags:

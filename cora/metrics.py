@@ -30,7 +30,22 @@ def compute(conn) -> dict:
     expanded = conn.execute("SELECT COUNT(*) AS n FROM ledger WHERE expanded = 1").fetchone()["n"]
     checkins = [json.loads(r["payload"]) | {"at": r["created_at"][:10]} for r in conn.execute("SELECT payload, created_at FROM events WHERE kind='checkin' ORDER BY created_at").fetchall()]
     docs = db.count_docs_by_species(conn)
+    p = conn.execute(
+        """SELECT COUNT(*) AS n, COALESCE(SUM(judged),0) AS judged, COALESCE(SUM(passed),0) AS passed,
+                  COALESCE(SUM(retried),0) AS retried, COALESCE(SUM(disagreement),0) AS disagreement
+           FROM pattern_log"""
+    ).fetchone()
+    p_reasons: dict[str, int] = {}
+    for r in conn.execute("SELECT reason FROM pattern_log WHERE passed = 0 AND reason IS NOT NULL").fetchall():
+        p_reasons[r["reason"]] = p_reasons.get(r["reason"], 0) + 1
+    pattern_stats = {
+        "checked": p["n"], "judged": p["judged"], "passed": p["passed"], "failed": p["n"] - p["passed"],
+        "retried": p["retried"],
+        "mechanical_vs_judge_disagreement_rate": (p["disagreement"] / p["judged"]) if p["judged"] else 0.0,
+        "failure_reasons": p_reasons,
+    }
     return {
+        "pattern_check": pattern_stats,
         "corpus": {"docs_by_species": docs, "total_docs": conn.execute("SELECT COUNT(*) AS n FROM docs").fetchone()["n"]},
         "cards": {"total": n_cards, "grounded": n_grounded, "duplicates": n_dupes},
         "gate": {

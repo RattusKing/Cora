@@ -19,6 +19,7 @@ class AskBody(BaseModel):
     query: str
     species: list[str] | None = None
     mock: bool = False
+    judge: bool = True  # False = mechanical pattern check only
     k: int | None = None
 
 
@@ -67,7 +68,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
             c.close()
             raise HTTPException(status_code=503, detail=f"could not create model client: {e}")
         try:
-            card = generate.ask(c, body.query, species_keys=body.species, llm=llm, k=body.k)
+            card = generate.ask(c, body.query, species_keys=body.species, llm=llm, k=body.k, use_judge=body.judge)
         except generate.NoEvidence as e:
             c.close()
             raise HTTPException(status_code=404, detail=str(e))
