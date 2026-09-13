@@ -57,13 +57,12 @@ def create_app(db_path: str | None = None, recheck_runner=None) -> FastAPI:
 
     @app.get("/api/species")
     def species():
+        from . import anage
+
         c = conn()
-        counts = db.count_docs_by_species(c)
+        rows = anage.panel_summary(c)
         c.close()
-        return {
-            "default": config.DEFAULT_SPECIES,
-            "species": [{"key": k, "name": s.name, "binomial": s.binomial, "docs": counts.get(k, 0)} for k, s in config.SPECIES.items()],
-        }
+        return {"default": config.DEFAULT_SPECIES, "species": rows}
 
     @app.post("/api/ask")
     def ask(body: AskBody):

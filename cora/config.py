@@ -103,7 +103,13 @@ SPECIES: dict[str, Species] = {
     ),
 }
 
-DEFAULT_SPECIES: list[str] = ["naked_mole_rat", "ocean_quahog", "rockfish"]
+# The full panel is the default (the red-team's Phase 1 corpus). The original three-species
+# P0.5 panel is kept for reference.
+DEFAULT_SPECIES: list[str] = list(SPECIES)
+P05_SPECIES: list[str] = ["naked_mole_rat", "ocean_quahog", "rockfish"]
+
+# AnAge (HAGR), CC BY 3.0.
+ANAGE_URL = "https://genomics.senescence.info/species/dataset.zip"
 
 AGING_TERMS = (
     "(aging[Title/Abstract] OR ageing[Title/Abstract] OR aging[MeSH Terms]"
@@ -117,6 +123,7 @@ DATA_DIR = Path(os.environ.get("CORA_DATA_DIR", "data"))
 DB_PATH = DATA_DIR / "cora.db"
 SNAPSHOT_DIR = DATA_DIR / "snapshots"  # raw PubMed XML, never re-fetched for an eval
 MANIFEST_PATH = DATA_DIR / "manifest.json"  # PMID list + download date (committed)
+ANAGE_PATH = DATA_DIR / "anage" / "anage_data.txt"  # raw AnAge table (local; CC BY 3.0)
 
 # --- NCBI E-utilities ------------------------------------------------------
 EUTILS_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
