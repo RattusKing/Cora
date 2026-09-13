@@ -26,14 +26,17 @@ first: the design trail in `docs/` explains why it starts small, and what it is 
 | Phase 1, first item | Done and merged: the pattern-line gate (mechanical check + independent judge + one rewrite) and `cora label` |
 | Weekly re-check | Done: `cora recheck` fetches only new abstracts, flags retracted or corrected sources that live cards cite, and reports what changed per card. No model calls |
 | Full panel + AnAge | Done: all eight species are the default panel; `cora anage` loads the AnAge table (4,645 species) and `cora species` shows each panel species' maximum longevity with its data quality, sample size and specimen origin, body mass, and a naive longevity quotient |
+| Graph-lite convergence | Done: `cora graph build` turns every abstract into gate-verified **findings** (species × mechanism × tier × direction, verbatim quote, primary vs review); `cora graph converge` ranks mechanisms by independent lineages with a **permutation p-value**; cards carry computed convergence for the mechanisms their pattern names. First real run: broad mechanisms reach all five lineages but **none beats the null**, which is the honest answer for lexicon matches over abstracts |
 | Tests | 60 passing; no network, no credentials |
 | Real-data checks | September 2026 ingest of the full panel: 641 abstracts (naked mole-rat 332, killifish 200, hydra 30, ocean quahog 27, rockfish 27, bowhead whale 27, Greenland shark 14, *Turritopsis* 8). Canaries on that corpus: 143 of 143 known-bad citations caught, 30 of 30 known-good passed. AnAge: 4,645 rows loaded; six of eight panel species matched (hydra and *Turritopsis* have no AnAge record). The first full-panel re-check found a real erratum on a source a card cites. Mock cards gate cleanly |
 | **Not yet verified** | **Live model calls.** The build environment had no credentials, so real drafting, the real judge, and the rewrite have never been run against the API. They follow the documented structured-output call shape and fail with a clear message when credentials are missing |
 
-**What's next**, in order, per `docs/Cora-Red-Team.md` §5: use it daily and label the eval
-pairs; then graph-lite convergence across species, which now has the covariates (body mass,
-temperature, metabolic rate) it needs for a residual-longevity phenotype. The standing
-rule: **no new spec until the previous phase has been used.**
+**What's next**, in order, per `docs/Cora-Red-Team.md` §5. Everything on the v0.3 build list
+through graph-lite now exists; what remains needs either a model key or a phylogeny. With a
+key: run real cards, run `cora graph build --model` so findings come from a model extractor
+instead of the lexicon, and label the eval pairs. Then a species tree (TimeTree) to replace
+the taxonomic-class lineage proxy with phylogenetic weighting and a proper residual
+longevity. The standing rule: **no new spec until the previous phase has been used.**
 
 ## Quickstart
 
@@ -47,6 +50,10 @@ cora species                     # the panel: docs, AnAge max longevity + qualit
 cora canary                      # prove the gate catches known-bad citations on the real corpus
 cora recheck                     # weekly: fetch only new abstracts, flag corrected sources, report what changed
 cora recheck --report            # print the last report without fetching
+cora graph build                 # gate-verified findings from every abstract (lexicon; --model for the model extractor)
+cora graph converge              # mechanisms ranked by independent lineages, with a permutation p-value
+cora graph converge --min-tier association --min-lineages 3
+cora graph show dna_repair       # every finding for one mechanism, per species, with its verbatim quote
 cora ask "DNA repair and extreme lifespan"          # needs model credentials (see below)
 cora ask "DNA repair and extreme lifespan" --mock   # no credentials: deterministic drafter + judge
 cora ask "..." --no-judge        # mechanical pattern check only (no judge call)
@@ -141,6 +148,40 @@ never calls a model, and does four things:
 0 9 * * 1  cd /path/to/Cora && cora recheck >> data/recheck.log 2>&1
 ```
 
+## Graph-lite convergence
+
+The graph is a table of **findings**, not a graph database: one row per (species,
+mechanism, tier, direction, evidence type, verbatim quote, PMID). Every quote passes the same
+citation gate as a card, whichever extractor produced it. Convergence is computed over
+findings only, at the **mechanism level**, because gene-level orthology exists for only four
+of the eight species.
+
+- **Mechanism vocabulary.** Eighteen mechanisms, each mapped to the hallmarks of aging where
+  one applies (DNA repair → genomic instability, telomeres, proteostasis, nutrient sensing,
+  senescence, stem cells, epigenetics, mitochondria, inflammation) plus panel-specific
+  mechanisms with no hallmark (hyaluronan, cancer resistance, hypoxia tolerance, metabolic
+  depression, cold adaptation, diapause).
+- **Extractors.** The default is a **lexicon**: each sentence matching a mechanism becomes a
+  finding at tier *mention*, upgraded to *association* or *intervention* by cue words and
+  downgraded to *tested_negative* by negation cues. A **model extractor** with the same schema
+  exists for when credentials are available. Both go through the gate.
+- **Primary vs review.** PubMed publication types separate primary studies from reviews.
+  Reviews are recorded as pointers and never count as support. Negative statements are
+  recorded and reported, never hidden.
+- **Lineages, not species.** Support is counted in independent lineages using a coarse
+  proxy, taxonomic class: a bowhead whale and a naked mole-rat are one lineage. A species
+  tree replaces this later; the column is named `lineages` so it is never mistaken for a
+  species count.
+- **A permutation null on every mechanism.** Mechanism labels are shuffled across primary
+  findings (preserving each species' finding count) and the number of lineages a label
+  reaches by chance is compared with the observed number. The first real run is the honest
+  result: the broad mechanisms reach all five lineages and **none beats the null**. That is
+  what mentions in abstracts can and cannot show, and Cora says so instead of calling it
+  convergence.
+- **Cards carry it.** When a card's pattern names a mechanism, the card shows that
+  mechanism's lineages, species, negatives and p-value, computed from the findings, never
+  asserted by the drafter.
+
 ## Evaluation
 
 The red-team's most convergent finding was that a verifier has to be measured against
@@ -162,8 +203,8 @@ human labels before it is trusted. `eval/` holds the tooling:
 ## Layout
 
 ```
-cora/           config · db · ingest · retrieve · card · gate · verify · llm · generate · ledger · recheck · metrics · label · evalset · cli · api
-cora/static/    the single-page UI (ask, what changed, ranked cards, expand, feedback, export, check-in)
+cora/           config · db · ingest · anage · retrieve · card · gate · verify · llm · generate · ledger · recheck · graph · metrics · label · evalset · cli · api
+cora/static/    the single-page UI (ask, what changed, convergence, ranked cards, expand, feedback, export, check-in)
 tests/          pytest, no network, no credentials
 eval/           labeling and scoring tools, closed-book control, gold questions
 docs/           the design trail (below)

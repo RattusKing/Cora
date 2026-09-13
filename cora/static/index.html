@@ -60,6 +60,10 @@
     <h2>What changed <button id="recheckBtn" style="float:right" onclick="runRecheck()">Re-check now</button></h2>
     <pre id="recheck">loading…</pre>
   </div>
+  <div class="panel">
+    <h2>Convergence across the panel <span style="float:right;font-weight:normal;text-transform:none">mechanisms in ≥ <select id="minLin" onchange="loadConvergence()"><option>2</option><option>3</option><option>4</option></select> lineages</span></h2>
+    <pre id="converge">loading…</pre>
+  </div>
   <div id="cards"></div>
   <div class="checkin">
     Weekly check-in — did Cora tell you something you used?
@@ -108,6 +112,11 @@ async function loadRecheck() {
   $('#recheck').textContent = r.text;
 }
 
+async function loadConvergence() {
+  const r = await api('/api/graph/converge?min_lineages=' + $('#minLin').value);
+  $('#converge').textContent = r.text;
+}
+
 async function runRecheck() {
   $('#recheckBtn').disabled = true;
   $('#recheck').textContent = 'searching PubMed for new abstracts…';
@@ -141,6 +150,7 @@ function renderCard(row) {
     <div class="meta" style="margin-top:6px"><span class="band">${esc(c.evidence_band.label)}</span>
       <span class="band">gate ${c.gate.n_passed}/${c.gate.n_items}</span>
       ${c.flags.map(f=>`<span class="band flag">${esc(f)}</span>`).join('')}</div>
+    ${(c.convergence||[]).slice(0,2).map(cv => `<div class="meta"><b>conv:</b> ${esc(cv.label)}: ${cv.n_species} species · ${cv.n_lineages} lineages (${esc(cv.lineages.join(', '))})${cv.p_perm != null ? ' · p_perm ' + cv.p_perm.toFixed(2) : ''}${cv.n_negative ? ' · ' + cv.n_negative + ' negative' : ''}</div>`).join('')}
     ${pc ? (pc.passed
         ? `<div class="meta">check: pass (${esc(pc.judge_model || 'mechanical only')})${pc.judged ? ` supported=${esc(pc.supported)} strength=${esc(pc.strength)}` : ''}${pc.retried ? ' · pattern rewritten once' : ''}</div>`
         : `<div class="meta dropped">check FAIL [${esc(pc.reason)}]: ${esc(pc.rationale)}</div>`) : ''}
@@ -210,7 +220,7 @@ $('#ask').addEventListener('submit', async ev => {
   $('#go').disabled = false;
 });
 
-loadSpecies(); loadMetrics(); loadRecheck(); loadLedger();
+loadSpecies(); loadMetrics(); loadRecheck(); loadConvergence(); loadLedger();
 </script>
 </body>
 </html>

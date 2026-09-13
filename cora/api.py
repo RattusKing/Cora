@@ -160,6 +160,30 @@ def create_app(db_path: str | None = None, recheck_runner=None) -> FastAPI:
         c.close()
         return {"ok": True}
 
+    @app.get("/api/graph/converge")
+    def get_converge(min_tier: str = "mention", min_lineages: int = 2, perms: int | None = None):
+        from . import graph
+
+        c = conn()
+        if graph.findings_count(c) == 0:
+            c.close()
+            return {"rows": [], "text": "no findings yet - run `cora graph build`", "findings": 0}
+        rows = graph.converge(c, min_tier=min_tier, perms=perms)
+        out = {"rows": [r for r in rows if r["n_lineages"] >= min_lineages], "text": graph.render_convergence(rows, min_lineages=min_lineages), "findings": graph.findings_count(c)}
+        c.close()
+        return out
+
+    @app.get("/api/graph/mechanism/{mechanism}")
+    def get_mechanism(mechanism: str):
+        from . import graph
+
+        c = conn()
+        rows = graph.mechanism_detail(c, mechanism)
+        c.close()
+        if not rows:
+            raise HTTPException(status_code=404, detail=f"no findings for {mechanism}")
+        return {"mechanism": mechanism, "label": graph.MECHANISMS.get(mechanism, {}).get("label", mechanism), "findings": rows}
+
     @app.post("/api/recheck")
     def post_recheck():
         c = conn()

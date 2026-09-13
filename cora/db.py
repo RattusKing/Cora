@@ -23,8 +23,25 @@ CREATE TABLE IF NOT EXISTS docs (
     retrieved_at TEXT NOT NULL,
     snapshot_file TEXT,
     license_tag  TEXT NOT NULL DEFAULT 'pubmed-abstract',
-    flags        TEXT
+    flags        TEXT,
+    pub_types    TEXT
 );
+CREATE TABLE IF NOT EXISTS findings (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    pmid          TEXT NOT NULL,
+    species_key   TEXT NOT NULL,
+    mechanism     TEXT NOT NULL,
+    hallmarks     TEXT NOT NULL,
+    tier          TEXT NOT NULL,
+    direction     TEXT,
+    evidence_type TEXT NOT NULL,
+    quote         TEXT NOT NULL,
+    extractor     TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    UNIQUE (pmid, species_key, mechanism, quote, extractor)
+);
+CREATE INDEX IF NOT EXISTS findings_mechanism ON findings(mechanism);
+CREATE INDEX IF NOT EXISTS findings_species ON findings(species_key);
 CREATE TABLE IF NOT EXISTS doc_species (
     pmid        TEXT NOT NULL,
     species_key TEXT NOT NULL,
@@ -138,6 +155,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(docs)").fetchall()}
     if "flags" not in cols:
         conn.execute("ALTER TABLE docs ADD COLUMN flags TEXT")
+    if "pub_types" not in cols:
+        conn.execute("ALTER TABLE docs ADD COLUMN pub_types TEXT")
 
 
 def connect(path: str | Path | None = None) -> sqlite3.Connection:
@@ -159,18 +178,19 @@ def _row_to_doc(r) -> dict:
     d = dict(r)
     d["species"] = sorted((d.get("species") or "").split(",")) if d.get("species") else []
     d["flags"] = json.loads(d["flags"]) if d.get("flags") else []
+    d["pub_types"] = json.loads(d["pub_types"]) if d.get("pub_types") else None
     return d
 
 
 def upsert_doc(conn: sqlite3.Connection, doc: dict, species_key: str | None) -> None:
     conn.execute(
-        """INSERT INTO docs (pmid, title, abstract, journal, pub_year, entrez_date, retrieved_at, snapshot_file, flags)
-           VALUES (:pmid, :title, :abstract, :journal, :pub_year, :entrez_date, :retrieved_at, :snapshot_file, :flags)
+        """INSERT INTO docs (pmid, title, abstract, journal, pub_year, entrez_date, retrieved_at, snapshot_file, flags, pub_types)
+           VALUES (:pmid, :title, :abstract, :journal, :pub_year, :entrez_date, :retrieved_at, :snapshot_file, :flags, :pub_types)
            ON CONFLICT(pmid) DO UPDATE SET
              title=excluded.title, abstract=excluded.abstract, journal=excluded.journal,
              pub_year=excluded.pub_year, entrez_date=excluded.entrez_date,
              retrieved_at=excluded.retrieved_at, snapshot_file=excluded.snapshot_file,
-             flags=excluded.flags""",
+             flags=excluded.flags, pub_types=COALESCE(excluded.pub_types, docs.pub_types)""",
         {
             "pmid": doc["pmid"],
             "title": doc.get("title") or "",
@@ -181,6 +201,7 @@ def upsert_doc(conn: sqlite3.Connection, doc: dict, species_key: str | None) -> 
             "retrieved_at": doc.get("retrieved_at") or now_iso(),
             "snapshot_file": doc.get("snapshot_file"),
             "flags": json.dumps(doc.get("flags") or []),
+            "pub_types": json.dumps(doc["pub_types"]) if doc.get("pub_types") is not None else None,
         },
     )
     if species_key:

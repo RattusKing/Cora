@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from . import config, db, ledger
+from . import config, db, graph, ledger
 from .card import Card, apply_steering, dedupe_key, evidence_band, new_card_id
 from .gate import gate_draft
 from .llm import LLM, MockLLM, get_llm
@@ -73,6 +73,9 @@ def ask(
     if status not in ("gated", "ungrounded"):
         flags.append(f"pattern check failed: {pc.reason}")
     supported_species = sorted({s.species_key for s in filtered.species_support})
+    convergence = None
+    if graph.findings_count(conn):
+        convergence = graph.card_convergence(conn, filtered.pattern)
     card = Card(
         id=new_card_id(),
         created_at=db.now_iso(),
@@ -87,6 +90,7 @@ def ask(
         next_action="desk_check" if status == "gated" else "none",
         status=status,
         pattern_check=pc,
+        convergence=convergence,
     )
     ledger.insert(conn, card)
     db.log_gate(conn, card.id, summary.n_items, summary.n_passed, [f["reason"] for f in summary.failed])

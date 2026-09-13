@@ -111,6 +111,20 @@ P05_SPECIES: list[str] = ["naked_mole_rat", "ocean_quahog", "rockfish"]
 # AnAge (HAGR), CC BY 3.0.
 ANAGE_URL = "https://genomics.senescence.info/species/dataset.zip"
 
+# Coarse lineage proxy for convergence until a species tree is loaded: taxonomic class.
+# Two mammals are ONE lineage; that is the point.
+SPECIES_CLASS: dict[str, str] = {
+    "naked_mole_rat": "Mammalia",
+    "bowhead_whale": "Mammalia",
+    "rockfish": "Actinopterygii",
+    "killifish": "Actinopterygii",
+    "ocean_quahog": "Bivalvia",
+    "greenland_shark": "Chondrichthyes",
+    "hydra": "Hydrozoa",
+    "turritopsis": "Hydrozoa",
+}
+GRAPH_PERMUTATIONS = int(os.environ.get("CORA_GRAPH_PERMUTATIONS", "200"))
+
 AGING_TERMS = (
     "(aging[Title/Abstract] OR ageing[Title/Abstract] OR aging[MeSH Terms]"
     " OR longevity[Title/Abstract] OR longevity[MeSH Terms]"
