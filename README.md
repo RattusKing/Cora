@@ -24,14 +24,14 @@ first: the design trail in `docs/` explains why it starts small, and what it is 
 | Design trail (`docs/`) | Feasibility study, architecture, Phase 1–4 specs, and a four-angle red-team whose corrections are folded into every spec (marked `[RT]`) |
 | P0.5 build | Done and merged: ingest, mechanical gate, cards, ledger, metrics, CLI, web UI, eval harness |
 | Phase 1, first item | Done and merged: the pattern-line gate (mechanical check + independent judge + one rewrite) and `cora label` |
+| Weekly re-check | Done: `cora recheck` fetches only new abstracts, flags retracted or corrected sources that live cards cite, and reports what changed per card. No model calls |
 | Tests | 60 passing; no network, no credentials |
 | Real-data checks | September 2026 ingest: 382 abstracts (naked mole-rat 331, ocean quahog 27, rockfish 27). Canaries on that corpus: 97 of 97 known-bad citations caught, 20 of 20 known-good passed. Mock cards gate cleanly |
 | **Not yet verified** | **Live model calls.** The build environment had no credentials, so real drafting, the real judge, and the rewrite have never been run against the API. They follow the documented structured-output call shape and fail with a clear message when credentials are missing |
 
 **What's next**, in order, per `docs/Cora-Red-Team.md` §5: use it daily and label the eval
-pairs; a weekly re-check that reports what changed for each ledger card; the full species
-panel plus AnAge lifespan attributes; then graph-lite convergence across species. The
-standing rule: **no new spec until the previous phase has been used.**
+pairs; the full species panel plus AnAge lifespan attributes; then graph-lite convergence
+across species. The standing rule: **no new spec until the previous phase has been used.**
 
 ## Quickstart
 
@@ -41,6 +41,8 @@ cora init                        # creates data/cora.db, prints the drafter/judg
 cora ingest                      # PubMed abstracts for naked mole-rat, ocean quahog, rockfish
 cora ingest --species bowhead_whale greenland_shark hydra turritopsis killifish   # optional extras
 cora canary                      # prove the gate catches known-bad citations on the real corpus
+cora recheck                     # weekly: fetch only new abstracts, flag corrected sources, report what changed
+cora recheck --report            # print the last report without fetching
 cora ask "DNA repair and extreme lifespan"          # needs model credentials (see below)
 cora ask "DNA repair and extreme lifespan" --mock   # no credentials: deterministic drafter + judge
 cora ask "..." --no-judge        # mechanical pattern check only (no judge call)
@@ -109,6 +111,30 @@ contain abstract text are git-ignored too.
   supporting species; a duplicate is linked to the original and demoted, not dropped.
 - **Human-lever fields** are annotated *"animal data only, no human application"*.
 
+## The weekly re-check
+
+Cadence follows the evidence rate: this panel gains a handful of aging abstracts a week, so
+a daily briefing would have nothing to say. `cora recheck` runs weekly (cron) or on demand,
+never calls a model, and does four things:
+
+1. Searches PubMed again for each panel species and fetches **only unseen PMIDs** (a few
+   requests, not a re-download). PMIDs that a search no longer returns are counted, never
+   deleted.
+2. Re-fetches the PMIDs that live cards cite and records **retraction, erratum and
+   expression-of-concern** links as flags on those sources.
+3. Matches each new abstract to live cards: does it rank in the top *k* for the card's query
+   among **all** abstracts in the card's species (not just the new ones), or share at least
+   three of the card's pattern terms? Each match is recorded as an update on the card, and
+   the ledger shows `new +N` until you open the card.
+4. Prints a templated **"what changed"** report. Every line is a new PMID, a source flag, or
+   a count; a run that finds nothing says so in one line. A flag or touch reported last week
+   is not repeated this week.
+
+```
+# crontab: every Monday at 09:00, from the project directory
+0 9 * * 1  cd /path/to/Cora && cora recheck >> data/recheck.log 2>&1
+```
+
 ## Evaluation
 
 The red-team's most convergent finding was that a verifier has to be measured against
@@ -130,8 +156,8 @@ human labels before it is trusted. `eval/` holds the tooling:
 ## Layout
 
 ```
-cora/           config · db · ingest · retrieve · card · gate · verify · llm · generate · ledger · metrics · label · evalset · cli · api
-cora/static/    the single-page UI (ask, ranked cards, expand, feedback, export, check-in)
+cora/           config · db · ingest · retrieve · card · gate · verify · llm · generate · ledger · recheck · metrics · label · evalset · cli · api
+cora/static/    the single-page UI (ask, what changed, ranked cards, expand, feedback, export, check-in)
 tests/          pytest, no network, no credentials
 eval/           labeling and scoring tools, closed-book control, gold questions
 docs/           the design trail (below)

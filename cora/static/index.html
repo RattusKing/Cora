@@ -20,12 +20,16 @@
   .species label { margin-right:10px; font-size:13px; color:var(--muted); }
   .metrics { display:flex; gap:18px; flex-wrap:wrap; font-size:13px; color:var(--muted); margin:10px 0 18px; }
   .metrics b { color:var(--ink); }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 16px; margin:12px 0 18px; }
+  .panel h2 { margin:0 0 8px; font-size:14px; color:var(--muted); font-weight:600; letter-spacing:.03em; text-transform:uppercase; }
+  .panel pre { margin:0; white-space:pre-wrap; font:13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin:12px 0; }
   .card .pattern { font-weight:600; font-size:15px; margin-bottom:6px; }
   .card .quote { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:13px; background:#faf9f4; border-left:3px solid var(--line); padding:6px 10px; margin:6px 0; white-space:pre-wrap; }
   .card .meta { color:var(--muted); font-size:13px; }
   .card .band { display:inline-block; padding:2px 8px; border-radius:999px; border:1px solid var(--line); font-size:12px; margin-right:6px; }
   .card .flag { color:var(--warn); }
+  .card .new { color:#fff; background:var(--ok); border-color:var(--ok); }
   .card .state { color:var(--muted); font-size:12px; }
   .card .actions { margin-top:10px; display:flex; gap:6px; flex-wrap:wrap; }
   .card details { margin-top:8px; }
@@ -40,7 +44,7 @@
 <body>
 <header>
   <h1>Cora</h1>
-  <span class="sub">citation-gated hypothesis cards · comparative biology of aging · P0.5</span>
+  <span class="sub">citation-gated hypothesis cards · comparative biology of aging</span>
 </header>
 <main>
   <form id="ask" class="row">
@@ -52,6 +56,10 @@
   <div class="species row" id="species"></div>
   <div class="err" id="err"></div>
   <div class="metrics" id="metrics"></div>
+  <div class="panel">
+    <h2>What changed <button id="recheckBtn" style="float:right" onclick="runRecheck()">Re-check now</button></h2>
+    <pre id="recheck">loading…</pre>
+  </div>
   <div id="cards"></div>
   <div class="checkin">
     Weekly check-in — did Cora tell you something you used?
@@ -85,8 +93,26 @@ async function loadMetrics() {
     `<span>corpus <b>${m.corpus.total_docs}</b> abstracts</span>` +
     `<span>cards <b>${m.cards.total}</b> (grounded <b>${m.cards.grounded}</b>)</span>` +
     `<span>gate fabrication rate <b>${(m.gate.fabrication_rate*100).toFixed(0)}%</b> over ${m.gate.items} quotes</span>` +
+    `<span>pattern checks passed <b>${m.pattern_check.passed}</b>/${m.pattern_check.checked}</span>` +
     `<span>days opened <b>${m.user.days_opened}</b></span>` +
-    `<span>cards that left Cora <b>${m.user.cards_left_cora}</b></span>`;
+    `<span>cards that left Cora <b>${m.user.cards_left_cora}</b></span>` +
+    `<span>re-checks <b>${m.recheck.runs}</b>${m.recheck.last_run ? ' (last ' + m.recheck.last_run.slice(0,10) + ')' : ''}</span>`;
+}
+
+async function loadRecheck() {
+  const r = await api('/api/recheck/last');
+  $('#recheck').textContent = r.text;
+}
+
+async function runRecheck() {
+  $('#recheckBtn').disabled = true;
+  $('#recheck').textContent = 'searching PubMed for new abstracts…';
+  try {
+    const r = await api('/api/recheck', {method:'POST'});
+    $('#recheck').textContent = r.text;
+    await loadLedger(); await loadMetrics();
+  } catch (e) { $('#recheck').textContent = 're-check failed: ' + e.message; }
+  $('#recheckBtn').disabled = false;
 }
 
 function strongestQuote(card) {
@@ -100,22 +126,23 @@ function renderCard(row) {
   const title = q && docs[q.pmid] ? docs[q.pmid].title : '';
   const state = row.state ? ` · ${esc(row.state)}` : '';
   const dup = row.duplicate_of ? ` · duplicate of ${esc(row.duplicate_of)}` : '';
+  const pc = c.pattern_check;
   return `<div class="card" id="card-${c.id}">
-    <div class="state">${c.id}${state}${dup}</div>
+    <div class="state">${c.id}${state}${dup} ${row.new_evidence ? `<span class="band new">new +${row.new_evidence}</span>` : ''}</div>
     <div class="pattern">${esc(c.draft.pattern)}</div>
-    ${q ? `<div class="quote">“${esc(q.quote)}”<br><span class="meta">— <a target="_blank" href="https://pubmed.ncbi.nlm.nih.gov/${esc(q.pmid)}/">PMID ${esc(q.pmid)}</a> ${esc(title)}</span></div>`
+    ${q ? `<div class="quote">“${esc(q.quote)}”<br><span class="meta">— <a target="_blank" href="https://pubmed.ncbi.nlm.nih.gov/${esc(q.pmid)}/">PMID ${esc(q.pmid)}</a> ${esc(title)}${(docs[q.pmid]?.flags||[]).length ? ` <span class="flag">!! ${esc(docs[q.pmid].flags.join(', '))}</span>` : ''}</span></div>`
         : `<div class="quote dropped">no quote survived the gate</div>`}
     <div class="meta"><b>against:</b> ${esc(c.draft.objection)}</div>
     ${c.draft.nearest_prior_pmid ? `<div class="meta"><b>vs</b> PMID ${esc(c.draft.nearest_prior_pmid)}: ${esc(c.draft.nearest_prior_note)}</div>` : ''}
     <div class="meta" style="margin-top:6px"><span class="band">${esc(c.evidence_band.label)}</span>
       <span class="band">gate ${c.gate.n_passed}/${c.gate.n_items}</span>
       ${c.flags.map(f=>`<span class="band flag">${esc(f)}</span>`).join('')}</div>
-    ${c.pattern_check ? (c.pattern_check.passed
-        ? `<div class="meta">check: pass (${esc(c.pattern_check.judge_model || 'mechanical only')})${c.pattern_check.judged ? ` supported=${esc(c.pattern_check.supported)} strength=${esc(c.pattern_check.strength)}` : ''}${c.pattern_check.retried ? ' · pattern rewritten once' : ''}</div>`
-        : `<div class="meta dropped">check FAIL [${esc(c.pattern_check.reason)}]: ${esc(c.pattern_check.rationale)}</div>`) : ''}
+    ${pc ? (pc.passed
+        ? `<div class="meta">check: pass (${esc(pc.judge_model || 'mechanical only')})${pc.judged ? ` supported=${esc(pc.supported)} strength=${esc(pc.strength)}` : ''}${pc.retried ? ' · pattern rewritten once' : ''}</div>`
+        : `<div class="meta dropped">check FAIL [${esc(pc.reason)}]: ${esc(pc.rationale)}</div>`) : ''}
     ${c.why_seeing_this.length ? `<div class="meta">why: ${esc(c.why_seeing_this.join('; '))}</div>` : ''}
     <div class="meta"><b>desk check:</b> ${esc(c.draft.desk_check.step)}</div>
-    <details ontoggle="if(this.open) expand('${c.id}')"><summary>evidence</summary><div id="ev-${c.id}">loading…</div></details>
+    <details ontoggle="if(this.open) expand('${c.id}')"><summary>evidence &amp; what changed</summary><div id="ev-${c.id}">loading…</div></details>
     <div class="actions">
       <button onclick="fb('${c.id}','accept')">accept</button>
       <button onclick="fb('${c.id}','reject:wrong')">reject: wrong</button>
@@ -137,9 +164,14 @@ async function expand(id) {
   const c = r.card, docs = r.docs || {};
   let html = c.draft.evidence.map(e => {
     const d = docs[e.pmid] || {};
-    return `<div class="ev">• <a target="_blank" href="https://pubmed.ncbi.nlm.nih.gov/${esc(e.pmid)}/">PMID ${esc(e.pmid)}</a> (${esc(d.pub_year||'?')}; ${esc((d.species||[]).join(', '))}) — “${esc(e.quote)}”</div>`;
+    const fl = (d.flags||[]).length ? ` <span class="flag">!! ${esc(d.flags.join(', '))}</span>` : '';
+    return `<div class="ev">• <a target="_blank" href="https://pubmed.ncbi.nlm.nih.gov/${esc(e.pmid)}/">PMID ${esc(e.pmid)}</a> (${esc(d.pub_year||'?')}; ${esc((d.species||[]).join(', '))}) — “${esc(e.quote)}”${fl}</div>`;
   }).join('');
   if (c.gate.failed.length) html += c.gate.failed.map(f => `<div class="ev dropped">dropped [${esc(f.reason)}] PMID ${esc(f.pmid)}: “${esc(f.quote.slice(0,120))}”</div>`).join('');
+  if ((r.updates||[]).length) {
+    html += `<div class="ev meta"><b>what changed since this card was made:</b></div>`;
+    html += r.updates.map(u => `<div class="ev">↳ ${esc(u.created_at.slice(0,10))} <a target="_blank" href="https://pubmed.ncbi.nlm.nih.gov/${esc(u.pmid)}/">PMID ${esc(u.pmid)}</a>: ${esc(u.reason)}</div>`).join('');
+  }
   const h = c.draft.human_lever;
   html += `<div class="ev meta">human lever: gene=${esc(h.gene)} direction=${esc(h.direction)} type=${esc(h.lever_type)} — ${esc(h.note)}</div>`;
   $(`#ev-${id}`).innerHTML = html;
@@ -153,7 +185,8 @@ async function fb(id, verdict) {
 
 async function exp(id) {
   const r = await api(`/api/card/${id}/export`, {method:'POST'});
-  $(`#out-${id}`).innerHTML = `<pre class="export">${esc(r.draft)}</pre>`;
+  const warn = r.status && r.status !== 'gated' ? `<div class="dropped">card status is ${esc(r.status)} — not clean to cite</div>` : '';
+  $(`#out-${id}`).innerHTML = warn + `<pre class="export">${esc(r.draft)}</pre>`;
   loadMetrics();
 }
 
@@ -173,7 +206,7 @@ $('#ask').addEventListener('submit', async ev => {
   $('#go').disabled = false;
 });
 
-loadSpecies(); loadMetrics(); loadLedger();
+loadSpecies(); loadMetrics(); loadRecheck(); loadLedger();
 </script>
 </body>
 </html>

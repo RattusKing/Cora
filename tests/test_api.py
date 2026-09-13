@@ -42,6 +42,27 @@ def test_ask_ledger_feedback_export_metrics(client):
     assert client.post("/api/checkin", json={"useful": False}).json() == {"ok": True}
 
 
+def test_recheck_endpoints_with_injected_runner(db_file):
+    from cora import recheck
+
+    calls = []
+
+    def fake_runner(conn):
+        calls.append(1)
+        report = recheck.Report(date="2026-09-20", species={"naked_mole_rat": {"n_pmids": 2, "new": 0, "gone": 0, "stored": 0}}, n_new=0, n_gone=0, touches=[], flags=[], n_cards_live=0, n_cards_touched=0)
+        from cora import db as _db
+        _db.log_recheck(conn, 0, 0, 0, 0, report.model_dump_json())
+        return report
+
+    client = TestClient(create_app(db_path=str(db_file), recheck_runner=fake_runner))
+    assert client.get("/api/recheck/last").json()["report"] is None
+    r = client.post("/api/recheck")
+    assert r.status_code == 200 and calls == [1] and "nothing changed" in r.json()["text"]
+    last = client.get("/api/recheck/last").json()
+    assert last["report"]["date"] == "2026-09-20" and "nothing changed" in last["text"]
+    assert client.get("/api/metrics").json()["recheck"]["runs"] == 1
+
+
 def test_ask_no_evidence_is_404(client):
     r = client.post("/api/ask", json={"query": "zzzz qqqq", "mock": True})
     assert r.status_code == 404

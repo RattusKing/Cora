@@ -1,4 +1,4 @@
-"""Thin web API + the single-page UI. The card is the unit; the gate decides what it says."""
+"""Thin web API + the single-page UI. The card is the unit; the gates decide what it says."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from . import config, db, generate, ledger, metrics
+from . import config, db, generate, ledger, metrics, recheck
 from .card import export_draft, render_tight
 from .llm import get_llm
 
@@ -35,11 +35,18 @@ class CheckinBody(BaseModel):
 
 def _doc_meta(conn, card) -> dict[str, dict]:
     docs = db.docs_by_pmid(conn, [e.pmid for e in card.draft.evidence])
-    return {p: {"title": d.get("title"), "pub_year": d.get("pub_year"), "species": d.get("species", []), "journal": d.get("journal")} for p, d in docs.items()}
+    return {
+        p: {"title": d.get("title"), "pub_year": d.get("pub_year"), "species": d.get("species", []), "journal": d.get("journal"), "flags": d.get("flags", [])}
+        for p, d in docs.items()
+    }
 
 
-def create_app(db_path: str | None = None) -> FastAPI:
-    app = FastAPI(title="Cora P0.5", version="0.0.5")
+def _live_cards(conn) -> dict:
+    return {r["card"].id: r["card"] for r in ledger.list_cards(conn, include_archived=False, limit=10000)}
+
+
+def create_app(db_path: str | None = None, recheck_runner=None) -> FastAPI:
+    app = FastAPI(title="Cora", version="0.0.7")
 
     def conn():
         return db.connect(db_path)
@@ -91,7 +98,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
         for r in rows:
             card = r["card"]
             docs = db.docs_by_pmid(c, [e.pmid for e in card.draft.evidence])
-            out.append({"card": card.model_dump(), "state": r["state"], "duplicate_of": r["duplicate_of"], "expanded": r["expanded"], "exported": r["exported"], "tight": render_tight(card, docs), "docs": _doc_meta(c, card)})
+            out.append(
+                {
+                    "card": card.model_dump(), "state": r["state"], "duplicate_of": r["duplicate_of"], "expanded": r["expanded"],
+                    "exported": r["exported"], "new_evidence": r["new_evidence"], "tight": render_tight(card, docs), "docs": _doc_meta(c, card),
+                }
+            )
         c.close()
         return out
 
@@ -102,8 +114,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
         if card is None:
             c.close()
             raise HTTPException(status_code=404, detail="no such card")
+        updates = db.card_updates(c, card_id)
         ledger.mark_expanded(c, card_id)
-        out = {"card": card.model_dump(), "docs": _doc_meta(c, card)}
+        out = {"card": card.model_dump(), "docs": _doc_meta(c, card), "updates": updates}
         c.close()
         return out
 
@@ -132,7 +145,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         ledger.mark_exported(c, card_id)
         text = export_draft(card, docs)
         c.close()
-        return {"draft": text}
+        return {"draft": text, "status": card.status}
 
     @app.get("/api/metrics")
     def get_metrics():
@@ -147,5 +160,30 @@ def create_app(db_path: str | None = None) -> FastAPI:
         metrics.record_checkin(c, body.useful, body.note)
         c.close()
         return {"ok": True}
+
+    @app.post("/api/recheck")
+    def post_recheck():
+        c = conn()
+        metrics.record_open(c)
+        runner = recheck_runner or (lambda cc: recheck.run(cc, log=lambda *a, **k: None))
+        try:
+            report = runner(c)
+        except Exception as e:
+            c.close()
+            raise HTTPException(status_code=502, detail=f"re-check failed: {e}")
+        out = {"report": recheck.report_as_dict(report), "text": recheck.render_report(report, _live_cards(c))}
+        c.close()
+        return out
+
+    @app.get("/api/recheck/last")
+    def get_last_recheck():
+        c = conn()
+        report = recheck.last_report(c)
+        if report is None:
+            c.close()
+            return {"report": None, "text": "no re-check has run yet"}
+        out = {"report": recheck.report_as_dict(report), "text": recheck.render_report(report, _live_cards(c))}
+        c.close()
+        return out
 
     return app

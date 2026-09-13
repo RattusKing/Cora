@@ -4,9 +4,11 @@
   "naked_mole_rat": {
    "query": "(\"Heterocephalus glaber\"[Title/Abstract] OR \"naked mole-rat\"[Title/Abstract] OR \"naked mole rat\"[Title/Abstract] OR \"naked mole-rats\"[Title/Abstract]) AND (aging[Title/Abstract] OR ageing[Title/Abstract] OR aging[MeSH Terms] OR longevity[Title/Abstract] OR longevity[MeSH Terms] OR senescence[Title/Abstract] OR lifespan[Title/Abstract] OR \"life span\"[Title/Abstract])",
    "date": "2026-09-08",
-   "n_pmids": 343,
-   "stored": 331,
+   "updated": "2026-09-13",
+   "n_pmids": 344,
+   "stored": 332,
    "pmids": [
+    "42724209",
     "42598912",
     "42388534",
     "42348880",
@@ -355,6 +357,7 @@
   "ocean_quahog": {
    "query": "\"Arctica islandica\"[Title/Abstract] AND (aging[Title/Abstract] OR ageing[Title/Abstract] OR aging[MeSH Terms] OR longevity[Title/Abstract] OR longevity[MeSH Terms] OR senescence[Title/Abstract] OR lifespan[Title/Abstract] OR \"life span\"[Title/Abstract])",
    "date": "2026-09-08",
+   "updated": "2026-09-13",
    "n_pmids": 27,
    "stored": 27,
    "pmids": [
@@ -390,6 +393,7 @@
   "rockfish": {
    "query": "Sebastes[Title/Abstract] AND (aging[Title/Abstract] OR ageing[Title/Abstract] OR aging[MeSH Terms] OR longevity[Title/Abstract] OR longevity[MeSH Terms] OR senescence[Title/Abstract] OR lifespan[Title/Abstract] OR \"life span\"[Title/Abstract])",
    "date": "2026-09-08",
+   "updated": "2026-09-13",
    "n_pmids": 27,
    "stored": 27,
    "pmids": [
@@ -422,5 +426,19 @@
     "10642449"
    ]
   }
- }
+ },
+ "runs": [
+  {
+   "date": "2026-09-13",
+   "kind": "recheck",
+   "species": [
+    "naked_mole_rat",
+    "ocean_quahog",
+    "rockfish"
+   ],
+   "new": 1,
+   "gone": 0,
+   "cards_touched": 2
+  }
+ ]
 }
