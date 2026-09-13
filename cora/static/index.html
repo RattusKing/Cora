@@ -81,8 +81,12 @@ async function api(path, opts) {
 async function loadSpecies() {
   const s = await api('/api/species');
   SPECIES = s.species;
-  $('#species').innerHTML = s.species.map(x =>
-    `<label><input type="checkbox" name="sp" value="${x.key}" ${s.default.includes(x.key)?'checked':''}> ${esc(x.name)} <span style="opacity:.6">(${x.docs})</span></label>`).join('');
+  $('#species').innerHTML = s.species.map(x => {
+    const a = x.anage;
+    const life = a && a.max_longevity_yrs ? ` · ${a.max_longevity_yrs}y${a.data_quality ? ' ' + a.data_quality : ''}${x.lq ? ' · LQ ' + x.lq.lq : ''}` : '';
+    const tip = a ? `AnAge ${esc(a.binomial)}: max longevity ${a.max_longevity_yrs} yrs, quality ${a.data_quality}, sample ${a.sample_size}, origin ${a.specimen_origin}${x.lq ? '; LQ ' + x.lq.lq + ' (' + x.lq.note + ')' : ''}` : 'no AnAge record loaded';
+    return `<label title="${tip}"><input type="checkbox" name="sp" value="${x.key}" ${s.default.includes(x.key)?'checked':''}> ${esc(x.name)} <span style="opacity:.6">(${x.docs}${life})</span></label>`;
+  }).join('');
 }
 
 function selectedSpecies() { return [...document.querySelectorAll('input[name=sp]:checked')].map(i => i.value); }

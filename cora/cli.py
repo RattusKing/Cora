@@ -251,6 +251,31 @@ def cmd_label(args):
         sys.exit(str(e))
 
 
+def cmd_anage(args):
+    from . import anage
+
+    conn = _conn(args)
+    if args.file:
+        path = args.file
+    else:
+        print(f"downloading {config.ANAGE_URL} ...")
+        path = anage.download()
+    n = anage.load(conn, path=path)
+    print(f"loaded {n} AnAge species rows from {path}")
+    print(anage.render_summary(anage.panel_summary(conn)))
+    conn.close()
+
+
+def cmd_species(args):
+    from . import anage
+
+    conn = _conn(args)
+    if anage.loaded_count(conn) == 0:
+        print("AnAge not loaded yet - run `cora anage` to fetch lifespan records (docs counts below are still real)")
+    print(anage.render_summary(anage.panel_summary(conn)))
+    conn.close()
+
+
 def cmd_serve(args):
     import uvicorn
 
@@ -330,6 +355,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--judge-model", default=None)
     s.add_argument("--mock", action="store_true", help="score the mock judge instead (no API key needed)")
     s.set_defaults(fn=cmd_label)
+
+    s = sub.add_parser("anage", help="download AnAge (HAGR, CC BY 3.0) lifespan records and load them; prints the panel table")
+    s.add_argument("--file", default=None, help="load a local anage_data.txt instead of downloading")
+    s.set_defaults(fn=cmd_anage)
+
+    sub.add_parser("species", help="the panel: docs per species, AnAge max longevity with quality/sample/origin, naive LQ").set_defaults(fn=cmd_species)
 
     s = sub.add_parser("serve", help="run the web UI")
     s.add_argument("--host", default="127.0.0.1")

@@ -90,6 +90,30 @@ CREATE TABLE IF NOT EXISTS recheck_log (
     n_flags         INTEGER NOT NULL,
     report_json     TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS species_traits (
+    hagrid            TEXT PRIMARY KEY,
+    class_            TEXT,
+    order_            TEXT,
+    family            TEXT,
+    genus             TEXT,
+    species           TEXT,
+    binomial          TEXT,
+    common_name       TEXT,
+    max_longevity_yrs REAL,
+    data_quality      TEXT,
+    sample_size       TEXT,
+    specimen_origin   TEXT,
+    adult_weight_g    REAL,
+    body_mass_g       REAL,
+    metabolic_rate_w  REAL,
+    temperature_k     REAL,
+    female_maturity_days REAL,
+    growth_rate       REAL,
+    source            TEXT,
+    loaded_at         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS species_traits_binomial ON species_traits(binomial);
+CREATE INDEX IF NOT EXISTS species_traits_genus ON species_traits(genus);
 CREATE TABLE IF NOT EXISTS card_updates (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     card_id    TEXT NOT NULL,

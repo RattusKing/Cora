@@ -25,21 +25,25 @@ first: the design trail in `docs/` explains why it starts small, and what it is 
 | P0.5 build | Done and merged: ingest, mechanical gate, cards, ledger, metrics, CLI, web UI, eval harness |
 | Phase 1, first item | Done and merged: the pattern-line gate (mechanical check + independent judge + one rewrite) and `cora label` |
 | Weekly re-check | Done: `cora recheck` fetches only new abstracts, flags retracted or corrected sources that live cards cite, and reports what changed per card. No model calls |
+| Full panel + AnAge | Done: all eight species are the default panel; `cora anage` loads the AnAge table (4,645 species) and `cora species` shows each panel species' maximum longevity with its data quality, sample size and specimen origin, body mass, and a naive longevity quotient |
 | Tests | 60 passing; no network, no credentials |
-| Real-data checks | September 2026 ingest: 382 abstracts (naked mole-rat 331, ocean quahog 27, rockfish 27). Canaries on that corpus: 97 of 97 known-bad citations caught, 20 of 20 known-good passed. Mock cards gate cleanly |
+| Real-data checks | September 2026 ingest of the full panel: 641 abstracts (naked mole-rat 332, killifish 200, hydra 30, ocean quahog 27, rockfish 27, bowhead whale 27, Greenland shark 14, *Turritopsis* 8). Canaries on that corpus: 143 of 143 known-bad citations caught, 30 of 30 known-good passed. AnAge: 4,645 rows loaded; six of eight panel species matched (hydra and *Turritopsis* have no AnAge record). The first full-panel re-check found a real erratum on a source a card cites. Mock cards gate cleanly |
 | **Not yet verified** | **Live model calls.** The build environment had no credentials, so real drafting, the real judge, and the rewrite have never been run against the API. They follow the documented structured-output call shape and fail with a clear message when credentials are missing |
 
 **What's next**, in order, per `docs/Cora-Red-Team.md` §5: use it daily and label the eval
-pairs; the full species panel plus AnAge lifespan attributes; then graph-lite convergence
-across species. The standing rule: **no new spec until the previous phase has been used.**
+pairs; then graph-lite convergence across species, which now has the covariates (body mass,
+temperature, metabolic rate) it needs for a residual-longevity phenotype. The standing
+rule: **no new spec until the previous phase has been used.**
 
 ## Quickstart
 
 ```bash
 pip install -e ".[dev]"          # on a restricted network add --no-build-isolation
 cora init                        # creates data/cora.db, prints the drafter/judge config
-cora ingest                      # PubMed abstracts for naked mole-rat, ocean quahog, rockfish
-cora ingest --species bowhead_whale greenland_shark hydra turritopsis killifish   # optional extras
+cora ingest                      # PubMed abstracts for all eight panel species (~640)
+cora ingest --species naked_mole_rat ocean_quahog rockfish   # or a subset
+cora anage                       # download AnAge (HAGR) lifespan records and print the panel table
+cora species                     # the panel: docs, AnAge max longevity + quality/sample/origin, body mass, naive LQ
 cora canary                      # prove the gate catches known-bad citations on the real corpus
 cora recheck                     # weekly: fetch only new abstracts, flag corrected sources, report what changed
 cora recheck --report            # print the last report without fetching
@@ -82,7 +86,9 @@ PubMed abstracts carry no per-record reuse license. `data/manifest.json` (PMIDs,
 query, and the download date per species) is committed so the corpus is reproducible.
 Species are queried by binomial or genus name only; common names pull the wrong organisms
 ("quahog" finds *Mercenaria*, "rockfish" finds striped bass). Generated eval files that
-contain abstract text are git-ignored too.
+contain abstract text are git-ignored too. The AnAge table (CC BY 3.0, from
+`genomics.senescence.info`) is kept locally at `data/anage/anage_data.txt`; a genus-level
+panel entry such as *Sebastes* takes the longest-lived species in the genus and says so.
 
 ## What a card is
 
