@@ -3,11 +3,14 @@
  "species": {
   "naked_mole_rat": {
    "query": "(\"Heterocephalus glaber\"[Title/Abstract] OR \"naked mole-rat\"[Title/Abstract] OR \"naked mole rat\"[Title/Abstract] OR \"naked mole-rats\"[Title/Abstract]) AND (aging[Title/Abstract] OR ageing[Title/Abstract] OR aging[MeSH Terms] OR longevity[Title/Abstract] OR longevity[MeSH Terms] OR senescence[Title/Abstract] OR lifespan[Title/Abstract] OR \"life span\"[Title/Abstract])",
-   "date": "2026-09-13",
-   "updated": "2026-09-13",
-   "n_pmids": 344,
-   "stored": 332,
+   "date": "2026-10-13",
+   "updated": "2026-10-13",
+   "n_pmids": 347,
+   "stored": 335,
    "pmids": [
+    "42864599",
+    "42830108",
+    "42749977",
     "42724209",
     "42598912",
     "42388534",
@@ -356,8 +359,8 @@
   },
   "ocean_quahog": {
    "query": "\"Arctica islandica\"[Title/Abstract] AND (aging[Title/Abstract] OR ageing[Title/Abstract] OR aging[MeSH Terms] OR longevity[Title/Abstract] OR longevity[MeSH Terms] OR senescence[Title/Abstract] OR lifespan[Title/Abstract] OR \"life span\"[Title/Abstract])",
-   "date": "2026-09-13",
-   "updated": "2026-09-13",
+   "date": "2026-10-13",
+   "updated": "2026-10-13",
    "n_pmids": 27,
    "stored": 27,
    "pmids": [
@@ -392,8 +395,8 @@
   },
   "rockfish": {
    "query": "Sebastes[Title/Abstract] AND (aging[Title/Abstract] OR ageing[Title/Abstract] OR aging[MeSH Terms] OR longevity[Title/Abstract] OR longevity[MeSH Terms] OR senescence[Title/Abstract] OR lifespan[Title/Abstract] OR \"life span\"[Title/Abstract])",
-   "date": "2026-09-13",
-   "updated": "2026-09-13",
+   "date": "2026-10-13",
+   "updated": "2026-10-13",
    "n_pmids": 27,
    "stored": 27,
    "pmids": [
@@ -428,8 +431,8 @@
   },
   "bowhead_whale": {
    "query": "(\"Balaena mysticetus\"[Title/Abstract] OR \"bowhead whale\"[Title/Abstract]) AND (aging[Title/Abstract] OR ageing[Title/Abstract] OR aging[MeSH Terms] OR longevity[Title/Abstract] OR longevity[MeSH Terms] OR senescence[Title/Abstract] OR lifespan[Title/Abstract] OR \"life span\"[Title/Abstract])",
-   "date": "2026-09-13",
-   "updated": "2026-09-13",
+   "date": "2026-10-13",
+   "updated": "2026-10-13",
    "n_pmids": 27,
    "stored": 27,
    "pmids": [
@@ -464,8 +467,8 @@
   },
   "greenland_shark": {
    "query": "(\"Somniosus microcephalus\"[Title/Abstract] OR \"Greenland shark\"[Title/Abstract]) AND (aging[Title/Abstract] OR ageing[Title/Abstract] OR aging[MeSH Terms] OR longevity[Title/Abstract] OR longevity[MeSH Terms] OR senescence[Title/Abstract] OR lifespan[Title/Abstract] OR \"life span\"[Title/Abstract])",
-   "date": "2026-09-13",
-   "updated": "2026-09-13",
+   "date": "2026-10-13",
+   "updated": "2026-10-13",
    "n_pmids": 14,
    "stored": 14,
    "pmids": [
@@ -487,13 +490,16 @@
   },
   "hydra": {
    "query": "(\"Hydra vulgaris\"[Title/Abstract] OR \"Hydra oligactis\"[Title/Abstract] OR \"Hydra magnipapillata\"[Title/Abstract]) AND (aging[Title/Abstract] OR ageing[Title/Abstract] OR aging[MeSH Terms] OR longevity[Title/Abstract] OR longevity[MeSH Terms] OR senescence[Title/Abstract] OR lifespan[Title/Abstract] OR \"life span\"[Title/Abstract])",
-   "date": "2026-09-13",
-   "updated": "2026-09-13",
-   "n_pmids": 31,
-   "stored": 30,
+   "date": "2026-10-13",
+   "updated": "2026-10-13",
+   "n_pmids": 34,
+   "stored": 33,
    "pmids": [
+    "42833632",
+    "42793312",
     "42694868",
     "42682710",
+    "42644350",
     "42551899",
     "42504596",
     "41983916",
@@ -527,8 +533,8 @@
   },
   "turritopsis": {
    "query": "(\"Turritopsis dohrnii\"[Title/Abstract] OR \"Turritopsis nutricula\"[Title/Abstract]) AND (aging[Title/Abstract] OR ageing[Title/Abstract] OR aging[MeSH Terms] OR longevity[Title/Abstract] OR longevity[MeSH Terms] OR senescence[Title/Abstract] OR lifespan[Title/Abstract] OR \"life span\"[Title/Abstract])",
-   "date": "2026-09-13",
-   "updated": "2026-09-13",
+   "date": "2026-10-13",
+   "updated": "2026-10-13",
    "n_pmids": 8,
    "stored": 8,
    "pmids": [
@@ -544,11 +550,17 @@
   },
   "killifish": {
    "query": "\"Nothobranchius furzeri\"[Title/Abstract] AND (aging[Title/Abstract] OR ageing[Title/Abstract] OR aging[MeSH Terms] OR longevity[Title/Abstract] OR longevity[MeSH Terms] OR senescence[Title/Abstract] OR lifespan[Title/Abstract] OR \"life span\"[Title/Abstract])",
-   "date": "2026-09-13",
-   "updated": "2026-09-13",
-   "n_pmids": 202,
-   "stored": 200,
+   "date": "2026-10-13",
+   "updated": "2026-10-13",
+   "n_pmids": 209,
+   "stored": 207,
    "pmids": [
+    "42866001",
+    "42838295",
+    "42811933",
+    "42807113",
+    "42802938",
+    "42771240",
     "42717099",
     "42695991",
     "42580624",
@@ -584,6 +596,7 @@
     "40667048",
     "40645978",
     "40602620",
+    "40418907",
     "40271120",
     "40260651",
     "40194520",
@@ -810,6 +823,21 @@
     "killifish"
    ],
    "stored": 665
+  },
+  {
+   "date": "2026-10-13",
+   "kind": "ingest",
+   "species": [
+    "naked_mole_rat",
+    "ocean_quahog",
+    "rockfish",
+    "bowhead_whale",
+    "greenland_shark",
+    "hydra",
+    "turritopsis",
+    "killifish"
+   ],
+   "stored": 678
   }
  ]
 }

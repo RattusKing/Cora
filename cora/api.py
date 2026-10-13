@@ -46,7 +46,9 @@ def _live_cards(conn) -> dict:
 
 
 def create_app(db_path: str | None = None, recheck_runner=None) -> FastAPI:
-    app = FastAPI(title="Cora", version="0.0.7")
+    from . import __version__
+
+    app = FastAPI(title="Cora", version=__version__)
 
     def conn():
         return db.connect(db_path)

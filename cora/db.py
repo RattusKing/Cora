@@ -248,6 +248,11 @@ def docs_by_pmid(conn: sqlite3.Connection, pmids: list[str]) -> dict[str, dict]:
     return {r["pmid"]: _row_to_doc(r) for r in rows}
 
 
+def count_docs(conn: sqlite3.Connection) -> int:
+    """Unique abstracts. Summing count_docs_by_species double-counts papers about two species."""
+    return conn.execute("SELECT COUNT(*) AS n FROM docs").fetchone()["n"]
+
+
 def count_docs_by_species(conn: sqlite3.Connection) -> dict[str, int]:
     rows = conn.execute(
         "SELECT species_key, COUNT(*) AS n FROM doc_species GROUP BY species_key"
