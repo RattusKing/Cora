@@ -23,6 +23,19 @@ def _quiet(*a, **k):
     pass
 
 
+def cmd_setup(args):
+    from . import setup
+
+    keys = args.species or config.DEFAULT_SPECIES
+    _validate_species(keys)
+    conn = _conn(args)
+    res = setup.run(conn, keys, refresh=args.refresh, skip=set(args.skip or ()), log=print if args.verbose else _quiet, db_label=str(getattr(args, "db", None) or config.DB_PATH))
+    print(setup.render(res, conn))
+    conn.close()
+    if not res.ok:
+        sys.exit(1)
+
+
 def cmd_init(args):
     conn = _conn(args)
     print(f"database ready: {getattr(args, 'db', None) or config.DB_PATH}")
@@ -324,6 +337,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="cora", description="Cora - citation-gated hypothesis cards")
     p.add_argument("--db", help=f"SQLite path (default {config.DB_PATH})")
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("setup", help="one command for a fresh install: init, PubMed ingest, AnAge, graph build, canary check")
+    s.add_argument("--species", nargs="*", help="species keys (default: the full panel)")
+    s.add_argument("--refresh", action="store_true", help="re-fetch species and AnAge even if already present")
+    s.add_argument("--skip", nargs="*", choices=["ingest", "anage", "graph", "canary"], help="steps to skip")
+    s.add_argument("--verbose", action="store_true", help="show per-batch progress")
+    s.set_defaults(fn=cmd_setup)
 
     sub.add_parser("init", help="create the database").set_defaults(fn=cmd_init)
 

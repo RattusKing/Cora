@@ -1,5 +1,7 @@
 # Cora
 
+[![tests](https://github.com/RattusKing/Cora/actions/workflows/tests.yml/badge.svg)](https://github.com/RattusKing/Cora/actions/workflows/tests.yml)
+
 **A citation-gated hypothesis-card tool for the comparative biology of aging.**
 
 Cora drafts one *hypothesis card* at a time from real PubMed abstracts about long-lived
@@ -27,8 +29,9 @@ first: the design trail in `docs/` explains why it starts small, and what it is 
 | Weekly re-check | Done: `cora recheck` fetches only new abstracts, flags retracted or corrected sources that live cards cite, and reports what changed per card. No model calls |
 | Full panel + AnAge | Done: all eight species are the default panel; `cora anage` loads the AnAge table (4,645 species) and `cora species` shows each panel species' maximum longevity with its data quality, sample size and specimen origin, body mass, and a naive longevity quotient |
 | Graph-lite convergence | Done: `cora graph build` turns every abstract into gate-verified **findings** (species × mechanism × tier × direction, verbatim quote, primary vs review); `cora graph converge` ranks mechanisms by independent lineages with a **permutation p-value**; cards carry computed convergence for the mechanisms their pattern names. First real run: broad mechanisms reach all five lineages but **none beats the null**, which is the honest answer for lexicon matches over abstracts |
-| Tests | 60 passing; no network, no credentials |
-| Real-data checks | September 2026 ingest of the full panel: 641 abstracts (naked mole-rat 332, killifish 200, hydra 30, ocean quahog 27, rockfish 27, bowhead whale 27, Greenland shark 14, *Turritopsis* 8). Canaries on that corpus: 143 of 143 known-bad citations caught, 30 of 30 known-good passed. AnAge: 4,645 rows loaded; six of eight panel species matched (hydra and *Turritopsis* have no AnAge record). The first full-panel re-check found a real erratum on a source a card cites. Mock cards gate cleanly |
+| Tests | 95 passing on Python 3.10–3.13; no network, no credentials. GitHub Actions runs them on every pull request and every push to `main` |
+| One-command setup | `cora setup` runs init, PubMed ingest, AnAge, graph build and a canary check, reports each step, and is safe to re-run. Fresh install against live services: about 20 seconds; re-run: under 2 seconds |
+| Real-data checks | October 2026 fresh install of the full panel: 654 unique abstracts (a paper about two species counts once), AnAge 4,645 rows with six of eight panel species matched (hydra and *Turritopsis* have no AnAge record), 1,696 findings with 0 dropped by the gate, canaries 95 of 95 known-bad caught and 20 of 20 known-good passed. The first full-panel re-check found a real erratum on a source a card cites. Mock cards gate cleanly |
 | **Not yet verified** | **Live model calls.** The build environment had no credentials, so real drafting, the real judge, and the rewrite have never been run against the API. They follow the documented structured-output call shape and fail with a clear message when credentials are missing |
 
 **What's next**, in order, per `docs/Cora-Red-Team.md` §5. Everything on the v0.3 build list
@@ -42,8 +45,23 @@ longevity. The standing rule: **no new spec until the previous phase has been us
 
 ```bash
 pip install -e ".[dev]"          # on a restricted network add --no-build-isolation
+cora setup                       # everything a fresh install needs, in one step (~20 s); safe to re-run
+```
+
+That's the whole install. Then:
+
+```bash
+cora ask "DNA repair and extreme lifespan"          # needs model credentials (see below)
+cora ask "DNA repair and extreme lifespan" --mock   # no credentials: deterministic drafter + judge
+cora serve                       # web UI at http://127.0.0.1:8000
+```
+
+Every command:
+
+```bash
+cora setup --refresh             # re-fetch everything; --skip anage graph ... to skip steps; --species to limit
 cora init                        # creates data/cora.db, prints the drafter/judge config
-cora ingest                      # PubMed abstracts for all eight panel species (~640)
+cora ingest                      # PubMed abstracts for all eight panel species (~650)
 cora ingest --species naked_mole_rat ocean_quahog rockfish   # or a subset
 cora anage                       # download AnAge (HAGR) lifespan records and print the panel table
 cora species                     # the panel: docs, AnAge max longevity + quality/sample/origin, body mass, naive LQ
@@ -203,7 +221,7 @@ human labels before it is trusted. `eval/` holds the tooling:
 ## Layout
 
 ```
-cora/           config · db · ingest · anage · retrieve · card · gate · verify · llm · generate · ledger · recheck · graph · metrics · label · evalset · cli · api
+cora/           config · db · ingest · anage · retrieve · card · gate · verify · llm · generate · ledger · recheck · graph · setup · metrics · label · evalset · cli · api
 cora/static/    the single-page UI (ask, what changed, convergence, ranked cards, expand, feedback, export, check-in)
 tests/          pytest, no network, no credentials
 eval/           labeling and scoring tools, closed-book control, gold questions

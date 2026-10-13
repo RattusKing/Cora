@@ -6,4 +6,4 @@ the cited PMID must exist in the local corpus, and the quote must be an exact
 for that check in P0.5.
 """
 
-__version__ = "0.0.5"
+__version__ = "0.1.0"
