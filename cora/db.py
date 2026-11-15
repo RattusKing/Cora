@@ -203,6 +203,30 @@ def _migrate(conn: sqlite3.Connection) -> None:
                FROM doc_species GROUP BY species_key""",
             (today(), today()),
         )
+    _migrate_card_topics(conn)
+
+
+def _migrate_card_topics(conn: sqlite3.Connection) -> None:
+    """Label cards written before topics existed as `aging` - the only topic there was.
+
+    Without this they carry no topic and show under every topic's ledger, because an
+    unlabelled card is shown rather than hidden.
+    """
+    try:
+        rows = conn.execute("SELECT id, card_json FROM ledger WHERE topics IS NULL").fetchall()
+    except sqlite3.OperationalError:
+        return
+    for r in rows:
+        try:
+            card = json.loads(r["card_json"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not card.get("topics"):
+            card["topics"] = ["aging"]
+        conn.execute(
+            "UPDATE ledger SET topics = ?, card_json = ? WHERE id = ?",
+            (json.dumps(card["topics"]), json.dumps(card), r["id"]),
+        )
 
 
 def connect(path: str | Path | None = None) -> sqlite3.Connection:

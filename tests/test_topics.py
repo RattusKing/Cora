@@ -180,3 +180,37 @@ def test_topics_cli_is_wired():
     assert p.parse_args(["topics", "--remove", "mine"]).remove == ["mine"]
     assert p.parse_args(["topics", "--export", "aging"]).export == "aging"
     assert p.parse_args(["topics", "-i"]).interactive is True
+
+
+def test_cards_from_before_topics_are_labelled_aging(tmp_path):
+    """An unlabelled card would otherwise show under every topic's ledger."""
+    import json as _json
+
+    from cora import ledger
+
+    path = tmp_path / "legacy_cards.db"
+    c = db.connect(path)
+    card = {
+        "id": "old1", "created_at": "2026-10-01T00:00:00+00:00", "query": "telomeres",
+        "species_scope": ["naked_mole_rat"],
+        "draft": {"pattern": "An old card", "evidence": [], "objection": "-",
+                  "human_lever": {}, "desk_check": {"step": "-"}, "species_support": []},
+        "gate": {"n_items": 0, "n_passed": 0, "n_failed": 0, "failed": [], "fabrication_rate": 0.0, "groundedness": 0.0},
+        "evidence_band": {"n_verified_quotes": 0, "n_pmids": 0, "n_species": 0, "label": "-"},
+        "why_seeing_this": [], "flags": [], "dedupe_key": "k",
+    }  # note: no "topics" key, as written before topics existed
+    c.execute(
+        """INSERT INTO ledger (id, created_at, topics, query, card_json, dedupe_key, duplicate_of,
+                               state, groundedness, n_verified, n_species)
+           VALUES ('old1', '2026-10-01T00:00:00+00:00', NULL, 'telomeres', ?, 'k', NULL, 'gated', 0.0, 0, 0)""",
+        (_json.dumps(card),),
+    )
+    c.commit()
+    c.close()
+
+    c2 = db.connect(path)  # the migration runs here
+    rows = ledger.list_cards(c2)
+    assert [r["card"].id for r in rows] == ["old1"] and rows[0]["card"].topics == ["aging"]
+    assert [r["card"].id for r in ledger.list_cards(c2, topic_keys=["aging"])] == ["old1"]
+    assert ledger.list_cards(c2, topic_keys=["hibernation"]) == []  # no longer shown everywhere
+    c2.close()
