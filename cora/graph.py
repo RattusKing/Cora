@@ -131,8 +131,11 @@ _NEGATIVE = ["no association", "not associated", "did not", "does not", "do not"
 # Contrast markers split a sentence into clauses. A negation in one clause does not negate
 # a mechanism named in another: "AMPK increased in adipose tissue, BUT not in liver" is not
 # a negative result for adipose tissue. 45% of tested_negative findings on the first real
-# five-topic corpus sat in such a sentence, so the tier is read from the matching clause.
-_CLAUSE_SPLIT = re.compile(r",?\s*\b(?:but|whereas|while|although|however|though)\b\s*", re.IGNORECASE)
+# five-topic corpus sat in such a sentence, so the tier is read from the clauses that name
+# the mechanism. "while" and "though" are deliberately absent: "measured WHILE the animals
+# were torpid, and no difference was seen" is one claim, not a contrast, and splitting it
+# would hide the negation.
+_CLAUSE_SPLIT = re.compile(r",?\s*\b(?:but|whereas|although|however)\b\s*", re.IGNORECASE)
 _INTERVENTION = ["knockdown", "knockout", "knock-out", "overexpress", "treated with", "treatment with", "supplement", "inhibitor", "administration", "transgenic", "extends lifespan", "extended lifespan", "extend lifespan", "increased lifespan", "prolonged lifespan", "lifespan extension", "mutant", "deletion of", "injected"]
 _ASSOCIATION = ["associated with", "correlat", "linked to", "related to", "predict", "enriched", "positively selected", "copy number", "expansion of", "upregulat", "downregulat", "higher levels", "lower levels", "elevated", "reduced", "contribute", "underlie", "candidate", "implicated", "involved in", "depend", "relies on", "rely on", "maintains", "maintain genome", "key contributor", "superior"]
 _UP = ["increase", "elevated", "higher", "enhanced", "upregulat", "up-regulat", "overexpress", "expansion", "gain", "greater", "more"]
@@ -160,19 +163,37 @@ def classify_tier(low: str) -> str:
     return "mention"
 
 
-def clause_for(sentence: str, compiled: list) -> str:
-    """The clause of `sentence` that actually contains the mechanism match.
+def clauses_for(sentence: str, compiled: list) -> list[str]:
+    """Every clause of `sentence` that names the mechanism - not just the first.
 
-    The stored quote stays the whole sentence - context matters to a reader, and the gate
-    checks the quote verbatim - but tier and direction are read from this clause only.
+    The stored quote stays the whole sentence (context matters to a reader, and the gate
+    checks the quote verbatim), but tier and direction are read from these clauses.
+
+    All of them, because a mechanism can be named on both sides of a contrast:
+    "Longevity is driven by enhanced DNA repair, BUT DNA repair capacity did not differ
+    between species" is a null result, and reading only the first clause would file it as
+    positive support - the costliest direction to be wrong in.
     """
     parts = [p for p in _CLAUSE_SPLIT.split(sentence) if p and p.strip()]
     if len(parts) < 2:
-        return sentence
-    for part in parts:
-        if any(p.search(part) for p in compiled):
-            return part
-    return sentence
+        return [sentence]
+    hits = [part for part in parts if any(p.search(part) for p in compiled)]
+    return hits or [sentence]
+
+
+def tier_and_direction(sentence: str, compiled: list) -> tuple[str, str | None]:
+    """Classify from the mechanism's own clauses, conservatively.
+
+    A negation in any clause that names the mechanism wins: a sentence that reports the
+    mechanism as tested and null somewhere is a negative result, whatever else it says.
+    Otherwise the strongest tier among those clauses is taken.
+    """
+    parts = clauses_for(sentence, compiled)
+    tiers = [classify_tier(p.lower()) for p in parts]
+    if "tested_negative" in tiers:
+        return "tested_negative", None
+    best = max(range(len(tiers)), key=lambda i: TIER_RANK[tiers[i]])
+    return tiers[best], classify_direction(parts[best].lower())
 
 
 def classify_direction(low: str) -> str | None:
@@ -212,7 +233,8 @@ class LexiconExtractor:
 
     def extract(self, doc: dict, mechanisms: list[str] | None = None) -> list[Finding]:
         out: list[Finding] = []
-        vocab = [k for k in (mechanisms or MECHANISMS) if k in MECHANISMS]
+        # `None` means the whole vocabulary; an empty list means an empty vocabulary.
+        vocab = list(MECHANISMS) if mechanisms is None else [k for k in mechanisms if k in MECHANISMS]
         evidence_type = classify_pub_types(doc.get("pub_types"))
         for sent in split_sentences(doc.get("abstract", "")):
             if len(sent) < config.MIN_QUOTE_CHARS:
@@ -221,9 +243,7 @@ class LexiconExtractor:
             if not hit:
                 continue
             for key in hit:
-                clause = clause_for(sent, MECHANISMS[key]["_compiled"]).lower()
-                tier = classify_tier(clause)
-                direction = classify_direction(clause)
+                tier, direction = tier_and_direction(sent, MECHANISMS[key]["_compiled"])
                 for sp in doc.get("species", []) or ["?"]:
                     out.append(Finding(pmid=doc["pmid"], species_key=sp, mechanism=key, hallmarks=MECHANISMS[key]["hallmarks"], tier=tier, direction=direction, evidence_type=evidence_type, quote=sent[:400], extractor=self.name))
         return out
@@ -255,7 +275,7 @@ EXTRACT_SYSTEM_HEAD = (
 
 def extract_system(mechanisms: list[str] | None = None) -> str:
     """The extraction prompt, carrying only the vocabulary this topic allows."""
-    keys = [k for k in (mechanisms or MECHANISMS) if k in MECHANISMS]
+    keys = list(MECHANISMS) if mechanisms is None else [k for k in mechanisms if k in MECHANISMS]
     return EXTRACT_SYSTEM_HEAD + ", ".join(f"{k} ({MECHANISMS[k]['label']})" for k in keys)
 
 
@@ -274,7 +294,7 @@ class AnthropicExtractor:
 
     def extract(self, doc: dict, mechanisms: list[str] | None = None) -> list[Finding]:
         payload = json.dumps({"pmid": doc["pmid"], "species": doc.get("species", []), "title": doc.get("title", ""), "abstract": doc.get("abstract", "")}, ensure_ascii=False)
-        allowed = {k for k in (mechanisms or MECHANISMS) if k in MECHANISMS}
+        allowed = set(MECHANISMS) if mechanisms is None else {k for k in mechanisms if k in MECHANISMS}
         response = self.client.messages.parse(model=self.model, max_tokens=4000, system=extract_system(mechanisms), messages=[{"role": "user", "content": payload}], output_format=FindingDrafts)
         if response.stop_reason == "refusal" or response.parsed_output is None:
             return []
@@ -305,12 +325,11 @@ def build(
 ) -> dict:
     """(Re)build findings for one extractor. Every quote is gate-checked before it is stored.
 
-    Each abstract is scanned with the mechanism vocabulary of **every** topic it belongs to,
-    not just the topics being built. A paper can belong to two topics (the naked mole-rat is
-    in three); rebuilding one of them deletes that paper's rows first, so narrowing the
-    vocabulary to the topic being built would silently drop the other topic's findings for
-    every shared paper. Convergence filters by vocabulary anyway, so the wider scan costs
-    nothing and keeps the invariant: a paper's findings are the union of its topics'.
+    A rebuild touches exactly what it can write: the papers of the topics in scope, and
+    within them only those topics' mechanisms. A paper can belong to several topics (the
+    naked mole-rat is in three), so both halves of that matter - deleting a shared paper's
+    whole row set would throw away the other topics' findings, and an empty scope must
+    delete nothing at all.
     """
     from . import topics as topics_mod
 
@@ -318,17 +337,22 @@ def build(
     tks = topics_mod.resolve(topic_keys, conn)
     registry = topics_mod.all_topics(conn)
     docs = db.get_docs(conn, species_keys, tks)
-    # Findings are rebuilt for the topics in scope only: another topic's rows stay put.
+    scope_vocab = topics_mod.mechanisms_for(tks, conn)
+    # Rebuild exactly what this run can write: the in-scope papers, and within them only the
+    # mechanisms of the topics in scope. Deleting every row for a paper would throw away the
+    # findings of the OTHER topics that paper belongs to (the naked mole-rat is in three).
+    # An empty scope deletes nothing: "no papers to rebuild" is not "rebuild everything",
+    # and reading it that way wiped the whole table when a topic had not been ingested yet.
     pmids = [d["pmid"] for d in docs]
-    if pmids:
-        for i in range(0, len(pmids), 400):
-            chunk = pmids[i : i + 400]
+    if scope_vocab:
+        for i in range(0, len(pmids), 200):
+            chunk = pmids[i : i + 200]
             conn.execute(
-                f"DELETE FROM findings WHERE extractor = ? AND pmid IN ({','.join('?' * len(chunk))})",
-                [extractor.name, *chunk],
+                f"""DELETE FROM findings WHERE extractor = ?
+                     AND pmid IN ({','.join('?' * len(chunk))})
+                     AND mechanism IN ({','.join('?' * len(scope_vocab))})""",
+                [extractor.name, *chunk, *scope_vocab],
             )
-    else:
-        conn.execute("DELETE FROM findings WHERE extractor = ?", (extractor.name,))
     stored = dropped = 0
     by_tier: Counter = Counter()
     by_mech: Counter = Counter()
@@ -337,7 +361,10 @@ def build(
     for doc in docs:
         if doc.get("pub_types") is None:
             unknown_types += 1
-        doc_topics = [t for t in (doc.get("topics") or tks) if t in registry]
+        # Only the topics in scope: with the delete above narrowed to this run's vocabulary,
+        # the other topics' rows for a shared paper are left alone rather than rewritten, so
+        # a topic again produces findings only in its own vocabulary.
+        doc_topics = [t for t in (doc.get("topics") or tks) if t in tks and t in registry]
         vocab = topics_mod.mechanisms_for(doc_topics or tks, conn)
         for f in extractor.extract(doc, vocab):
             if check_item(EvidenceItem(pmid=f.pmid, quote=f.quote), {doc["pmid"]: doc}) is not None:
@@ -510,7 +537,7 @@ def mechanism_detail(conn, mechanism: str, extractor: str | None = None, topic_k
 
 
 def mechanisms_in_text(text: str, mechanisms: list[str] | None = None) -> list[str]:
-    keys = [k for k in (mechanisms or MECHANISMS) if k in MECHANISMS]
+    keys = list(MECHANISMS) if mechanisms is None else [k for k in mechanisms if k in MECHANISMS]
     return [k for k in keys if any(p.search(text or "") for p in MECHANISMS[k]["_compiled"])]
 
 

@@ -270,3 +270,37 @@ def test_first_run_picker_paths(conn, monkeypatch, capsys):
 
     monkeypatch.setattr(builtins, "input", interrupted)
     assert cli._ask_topics(conn) == ["aging"]  # ctrl-c at the prompt is not a crash
+
+
+def test_a_shared_topic_file_is_validated_against_the_registries():
+    """A topic arriving as JSON must fail here, not as a KeyError inside `cora species`."""
+    base = dict(key="ok_key", name="n", question="q", terms="x[Title/Abstract]",
+                species=["bats"], mechanisms=["telomere"])
+    topics.custom_topic(**base)  # the good case
+
+    with pytest.raises(topics.TopicError) as e:
+        topics.custom_topic(**dict(base, species=["bats", "platypuss"]))
+    assert "platypuss" in str(e.value) and "Known keys" in str(e.value)
+
+    with pytest.raises(topics.TopicError) as e:
+        topics.custom_topic(**dict(base, mechanisms=["telomere", "warp_drive"]))
+    assert "warp_drive" in str(e.value)
+
+    # an empty vocabulary is not "every mechanism"
+    with pytest.raises(topics.TopicError):
+        topics.custom_topic(**dict(base, mechanisms=[]))
+    with pytest.raises(topics.TopicError):
+        topics.from_json(json.dumps(dict(base, mechanisms=[], lineage_rank="class", note="")))
+
+
+def test_an_empty_mechanism_list_means_none_not_all():
+    from cora import graph
+
+    ex = graph.LexiconExtractor()
+    doc = {"pmid": "1", "species": ["hydra"], "pub_types": ["Journal Article"],
+           "abstract": "Telomere length is associated with lifespan and stem cells are involved."}
+    assert ex.extract(doc, []) == []                      # explicit empty vocabulary
+    assert {f.mechanism for f in ex.extract(doc, None)}   # None means the whole vocabulary
+    assert {f.mechanism for f in ex.extract(doc, ["telomere"])} == {"telomere"}
+    assert graph.mechanisms_in_text("telomere length", []) == []
+    assert graph.mechanisms_in_text("telomere length", None) == ["telomere"]

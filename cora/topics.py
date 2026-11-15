@@ -212,8 +212,28 @@ def custom_topic(
         raise TopicError("a custom topic needs PubMed search terms")
     if not species:
         raise TopicError("a custom topic needs at least one species")
+    if not mechanisms:
+        # An empty vocabulary is not "every mechanism": the topic would store findings it
+        # can never report, because convergence filters on its own vocabulary.
+        raise TopicError("a custom topic needs at least one mechanism")
     if lineage_rank not in LINEAGE_RANKS:
         raise TopicError(f"lineage_rank must be one of {', '.join(LINEAGE_RANKS)}")
+    # Validate against the registries here, not only in the interactive prompt: a topic
+    # arriving as JSON from --file or a shared export must fail now, with a readable
+    # message, rather than as a KeyError deep in `cora species` or a swallowed ingest error.
+    from . import config
+    from .graph import MECHANISMS
+
+    unknown_species = [s for s in species if s not in config.SPECIES]
+    if unknown_species:
+        raise TopicError(
+            f"unknown species: {', '.join(unknown_species)}. Known keys: {', '.join(config.SPECIES)}"
+        )
+    unknown_mechs = [m for m in mechanisms if m not in MECHANISMS]
+    if unknown_mechs:
+        raise TopicError(
+            f"unknown mechanisms: {', '.join(unknown_mechs)}. Known keys: {', '.join(MECHANISMS)}"
+        )
     return Topic(
         key=key, name=name.strip(), question=question.strip(), terms=terms.strip(),
         species=tuple(species), mechanisms=tuple(mechanisms), lineage_rank=lineage_rank,

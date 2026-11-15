@@ -1,4 +1,4 @@
-from cora import db, generate, graph
+from cora import db, generate, graph, topics
 from cora.card import EvidenceItem
 from cora.gate import check_item
 from cora.llm import MockLLM
@@ -259,3 +259,67 @@ def test_findings_are_per_paper_and_species(conn):
     graph.build(conn, graph.LexiconExtractor(), log=lambda *a, **k: None)
     two = len([r for r in graph._load_findings(conn, None, ["aging"]) if r["pmid"] == "8100001"])
     assert two == 2 * one > 0
+
+
+def test_an_empty_scope_deletes_nothing(conn):
+    """"No papers to rebuild" is not "rebuild everything". Building a topic that has not
+    been ingested yet must not wipe the findings of the topic that has."""
+    graph.build(conn, graph.LexiconExtractor(), log=lambda *a, **k: None, topic_keys=["aging"])
+    before = graph.findings_count(conn)
+    assert before > 0
+
+    graph.build(conn, graph.LexiconExtractor(), log=lambda *a, **k: None, topic_keys=["hibernation"])
+    assert graph.findings_count(conn) == before  # no hibernation corpus: nothing touched
+
+    # the same via a species that is in no enabled topic's panel
+    graph.build(conn, graph.LexiconExtractor(), log=lambda *a, **k: None, species_keys=["elephant"])
+    assert graph.findings_count(conn) == before
+
+
+def test_a_null_result_after_a_contrast_is_not_positive_support(conn):
+    """The costliest direction to be wrong in: a reported null counted as convergence."""
+    ex = graph.LexiconExtractor()
+    sent = ("Longevity is driven by enhanced DNA repair, but DNA repair capacity "
+            "did not differ between the species studied.")
+    f = next(x for x in ex.extract(_doc("9100001", ["rockfish"], sent, pub_types=["Journal Article"]))
+             if x.mechanism == "dna_repair")
+    assert f.tier == "tested_negative" and f.direction is None
+
+    # "while" is temporal far more often than contrastive: do not split on it
+    sent2 = ("Mitochondrial respiration was measured while the animals were torpid, "
+             "and no difference was seen between groups.")
+    g = next(x for x in ex.extract(_doc("9100002", ["bear"], sent2, pub_types=["Journal Article"]))
+             if x.mechanism == "mitochondria")
+    assert g.tier == "tested_negative"
+
+    # the clause fix still holds: a negation about a DIFFERENT subject is not a negative
+    sent3 = ("AMPK activity was increased 3-fold in white adipose tissue, "
+             "but activation was not seen in liver.")
+    h = next(x for x in ex.extract(_doc("9100003", ["ground_squirrel"], sent3, pub_types=["Journal Article"]))
+             if x.mechanism == "insulin_resistance")
+    assert h.tier != "tested_negative"
+
+
+def test_a_topic_build_writes_only_its_own_vocabulary(conn):
+    """A shared paper keeps the other topic's rows, and does not gain its mechanisms."""
+    shared = {
+        "pmid": "9200001", "title": "NMR telomeres and hypoxia", "retrieved_at": "x",
+        "pub_types": ["Journal Article"],
+        "abstract": ("Telomere length is associated with lifespan in the naked mole-rat. "
+                     "Hypoxia tolerance is associated with metabolic depression in this species."),
+    }
+    db.upsert_doc(conn, shared, "naked_mole_rat", topic_key="aging")
+    db.upsert_doc(conn, shared, "naked_mole_rat", topic_key="hypoxia")
+    conn.commit()
+
+    graph.build(conn, graph.LexiconExtractor(), log=lambda *a, **k: None, topic_keys=["aging"])
+    aging_rows = {r["mechanism"] for r in graph._load_findings(conn, None, ["aging"]) if r["pmid"] == "9200001"}
+    assert "telomere" in aging_rows
+
+    graph.build(conn, graph.LexiconExtractor(), log=lambda *a, **k: None, topic_keys=["hypoxia"])
+    rows = {r["mechanism"] for r in graph._load_findings(conn, None, ["hypoxia"]) if r["pmid"] == "9200001"}
+    assert "telomere" in rows, "the aging rows must survive a hypoxia-only rebuild"
+    # ... but the hypoxia build did not CREATE aging-only mechanisms it cannot report
+    hypoxia_only = graph.build(conn, graph.LexiconExtractor(), log=lambda *a, **k: None, topic_keys=["hypoxia"])
+    assert "telomere" not in hypoxia_only["by_mechanism"]
+    assert set(hypoxia_only["by_mechanism"]) <= set(topics.BUILTIN["hypoxia"].mechanisms)
