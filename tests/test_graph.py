@@ -240,3 +240,22 @@ def test_rebuilding_one_topic_keeps_a_shared_papers_other_findings(conn):
     n = conn.execute("SELECT COUNT(*) AS n FROM findings WHERE pmid = '8000001'").fetchone()["n"]
     graph.build(conn, graph.LexiconExtractor(), log=lambda *a, **k: None, topic_keys=["aging", "hypoxia"])
     assert conn.execute("SELECT COUNT(*) AS n FROM findings WHERE pmid = '8000001'").fetchone()["n"] == n
+
+
+def test_findings_are_per_paper_and_species(conn):
+    """Why the same topic reports more findings inside a multi-topic corpus: a finding is
+    (paper, species, mechanism), so a paper linked to two species yields two."""
+    doc = {
+        "pmid": "8100001", "title": "Two panels", "retrieved_at": "x", "pub_types": ["Journal Article"],
+        "abstract": "Hypoxia tolerance is associated with metabolic depression in both species studied here.",
+    }
+    db.upsert_doc(conn, doc, "naked_mole_rat", topic_key="aging")
+    conn.commit()
+    graph.build(conn, graph.LexiconExtractor(), log=lambda *a, **k: None)
+    one = len([r for r in graph._load_findings(conn, None, ["aging"]) if r["pmid"] == "8100001"])
+
+    db.upsert_doc(conn, doc, "bowhead_whale", topic_key="aging")  # a second panel species
+    conn.commit()
+    graph.build(conn, graph.LexiconExtractor(), log=lambda *a, **k: None)
+    two = len([r for r in graph._load_findings(conn, None, ["aging"]) if r["pmid"] == "8100001"])
+    assert two == 2 * one > 0

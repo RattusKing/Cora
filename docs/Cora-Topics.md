@@ -59,7 +59,23 @@ finding for several mechanisms, as it always could.
 — the four new topics add 19 new keys — and `aging` keeps `lineage_rank="class"`. A fresh
 aging-only ingest after this change produced 662 abstracts and 1,717 findings with 0 dropped
 by the gate, against 654 / 1,696 a month earlier: the difference is new papers, not a
-changed pipeline.
+changed pipeline. The headline is unchanged: no mechanism beats the null (lowest
+permutation p = 0.46).
+
+Measure that number on an **aging-only** database. A finding is per paper *and* species, so
+running the aging build inside the five-topic corpus reports more (1,888): a paper there can
+carry species links from another topic's panel. Same code, different corpus - worth knowing
+before comparing two runs.
+
+**The tier of a finding is read from one clause, not the sentence.** A negation in one
+clause does not negate a mechanism named in another: "AMPK activity was increased 3-fold in
+white adipose tissue … *but* activation was not seen in liver" was being stored as a
+*negative* result for adipose tissue. The stored quote is still the whole sentence - a
+reader needs the context, and the citation gate checks the quote verbatim - but tier and
+direction come from the clause holding the mechanism. On the first five-topic corpus this
+cut negatives whose sentence also carries a contrast marker from 45% to 29% of all
+negatives; the remaining 29% are sentences where the negation really is in the mechanism's
+clause.
 
 **A single-lineage panel says so.** Every cancer-resistance species is a mammal, so no
 mechanism can ever reach two class-level lineages there. Reporting "no mechanism reaches 2
