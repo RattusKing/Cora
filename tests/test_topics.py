@@ -243,3 +243,30 @@ def test_a_custom_topic_that_finds_nothing_is_not_stored_silently(tmp_path, monk
     forced = cli.build_parser().parse_args(["topics", "--add", "--file", str(f), "--force"])
     cli._add_topic(conn, forced)
     assert "empty_topic" in topics.all_topics(conn)
+
+
+def test_first_run_picker_paths(conn, monkeypatch, capsys):
+    """The question `cora setup` asks on a fresh install, and both ways it can go wrong."""
+    import builtins
+
+    from cora import cli
+
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False, raising=False)
+    assert cli._ask_topics(conn) == ["aging"]  # no terminal: default, and say so
+    assert "not a terminal" in capsys.readouterr().out
+
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr(builtins, "input", lambda *a: "2,4")
+    assert cli._ask_topics(conn) == ["regeneration", "hypoxia"]
+
+    answers = iter(["", "99", "nonsense"])
+    monkeypatch.setattr(builtins, "input", lambda *a: next(answers))
+    assert cli._ask_topics(conn) == ["aging"]  # three bad answers: fall back, do not loop
+    out = capsys.readouterr().out
+    assert "is not on the list (1-5)" in out and "no selection" in out
+
+    def interrupted(*a):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(builtins, "input", interrupted)
+    assert cli._ask_topics(conn) == ["aging"]  # ctrl-c at the prompt is not a crash
