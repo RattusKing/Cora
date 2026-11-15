@@ -18,7 +18,7 @@ import json
 
 from pydantic import BaseModel
 
-from . import config, db, ingest, ledger
+from . import config, db, ingest, ledger, topics
 from .card import Card, pattern_tokens
 from .retrieve import Index, tokenize
 
@@ -42,13 +42,14 @@ class SourceFlag(BaseModel):
 
 class Report(BaseModel):
     date: str
-    species: dict[str, dict]  # key -> {"n_pmids", "new", "gone", "stored"}
+    species: dict[str, dict]  # "topic/species" -> {"topic", "species", "n_pmids", "new", "gone", "stored"}
     n_new: int
     n_gone: int
     touches: list[Touch]
     flags: list[SourceFlag]
     n_cards_live: int
     n_cards_touched: int
+    topics: list[str] = []
 
 
 def match_new_docs(cards: list[Card], new_docs: list[dict], k: int = 5, corpus_docs: list[dict] | None = None) -> list[Touch]:
@@ -100,29 +101,50 @@ def source_flags(conn, cards: list[Card], fetch_fn=None, log=print) -> list[Sour
     return out
 
 
-def run(conn, species_keys: list[str] | None = None, k: int = 5, search_fn=None, fetch_fn=None, log=print) -> Report:
-    species_keys = list(species_keys or config.DEFAULT_SPECIES)
+def run(
+    conn,
+    species_keys: list[str] | None = None,
+    k: int = 5,
+    search_fn=None,
+    fetch_fn=None,
+    log=print,
+    topic_keys: list[str] | None = None,
+) -> Report:
+    topic_keys = topics.resolve(topic_keys, conn)
+    registry = topics.all_topics(conn)
+    pairs = topics.pairs(topic_keys, species_keys, conn)
     manifest = ingest.load_manifest() or ingest._empty_manifest()
-    per_species: dict[str, dict] = {}
+    manifest.setdefault("pairs", {})
+    per_pair: dict[str, dict] = {}
     new_docs: list[dict] = []
-    for key in species_keys:
-        r = ingest.update_species(conn, config.SPECIES[key], manifest, log=log, search_fn=search_fn, fetch_fn=fetch_fn)
-        per_species[key] = {"n_pmids": len(r["pmids"]), "new": len(r["new"]), "gone": len(r["gone"]), "stored": r["stored"]}
+    for tk, sk in pairs:
+        r = ingest.update_species(
+            conn, config.SPECIES[sk], manifest, topic=registry[tk], log=log, search_fn=search_fn, fetch_fn=fetch_fn
+        )
+        pid = ingest.pair_id(tk, sk)
+        per_pair[pid] = {
+            "topic": tk, "species": sk, "n_pmids": len(r["pmids"]),
+            "new": len(r["new"]), "gone": len(r["gone"]), "stored": r["stored"],
+        }
         new_docs.extend(r["docs"])
-        prev = manifest["species"].get(key, {})
-        manifest["species"][key] = {
-            "query": r["query"], "date": prev.get("date", r["date"]), "updated": r["date"],
-            "n_pmids": len(r["pmids"]), "stored": prev.get("stored", 0) + r["stored"], "pmids": r["pmids"],
+        prev = manifest["pairs"].get(pid) or manifest.get("species", {}).get(sk, {})
+        manifest["pairs"][pid] = {
+            "topic": tk, "species": sk, "query": r["query"], "date": prev.get("date", r["date"]),
+            "updated": r["date"], "n_pmids": len(r["pmids"]),
+            "stored": prev.get("stored", 0) + r["stored"], "pmids": r["pmids"],
         }
     # a doc can belong to several species; dedupe by pmid and merge species lists from the DB
     if new_docs:
         stored = db.docs_by_pmid(conn, sorted({d["pmid"] for d in new_docs}))
         new_docs = list(stored.values())
 
-    live = [r["card"] for r in ledger.list_cards(conn, include_archived=False, limit=10000)]
+    # Only cards of the topics being re-checked: a new cancer paper must not be ranked
+    # against an aging card's query, because the corpus it would be ranked in is this
+    # topic's, not that card's.
+    live = [r["card"] for r in ledger.list_cards(conn, include_archived=False, limit=10000, topic_keys=topic_keys)]
     # Only touches and flags not already recorded count as "changed": a flag seen last week
     # is not news this week.
-    corpus = db.get_docs(conn, species_keys) if new_docs else []
+    corpus = db.get_docs(conn, [s for _, s in pairs], topic_keys) if new_docs else []
     touches = [t for t in match_new_docs(live, new_docs, k=k, corpus_docs=corpus) if db.add_card_update(conn, t.card_id, t.pmid, "; ".join(t.reasons))]
     flags = [
         f for f in source_flags(conn, live, fetch_fn=fetch_fn, log=log)
@@ -131,15 +153,16 @@ def run(conn, species_keys: list[str] | None = None, k: int = 5, search_fn=None,
 
     report = Report(
         date=db.today(),
-        species=per_species,
-        n_new=sum(s["new"] for s in per_species.values()),
-        n_gone=sum(s["gone"] for s in per_species.values()),
+        species=per_pair,
+        n_new=sum(s["new"] for s in per_pair.values()),
+        n_gone=sum(s["gone"] for s in per_pair.values()),
         touches=touches,
         flags=flags,
         n_cards_live=len(live),
         n_cards_touched=len({t.card_id for t in touches} | {f.card_id for f in flags}),
+        topics=topic_keys,
     )
-    manifest.setdefault("runs", []).append({"date": report.date, "kind": "recheck", "species": species_keys, "new": report.n_new, "gone": report.n_gone, "cards_touched": report.n_cards_touched})
+    manifest.setdefault("runs", []).append({"date": report.date, "kind": "recheck", "topics": topic_keys, "new": report.n_new, "gone": report.n_gone, "cards_touched": report.n_cards_touched})
     manifest["runs"] = manifest["runs"][-50:]
     ingest.save_manifest(manifest)
     db.log_recheck(conn, report.n_new, report.n_gone, report.n_cards_touched, len(flags), report.model_dump_json())
@@ -154,8 +177,13 @@ def last_report(conn) -> Report | None:
 
 def render_report(report: Report, cards_by_id: dict[str, Card]) -> str:
     """Templated 'what changed'. Every line is a PMID, a flag, or a count."""
-    per = " · ".join(f"{k} +{v['new']}" for k, v in report.species.items())
-    head = f"recheck {report.date} · {len(report.species)} species · {report.n_new} new abstract{'s' if report.n_new != 1 else ''} ({per}) · {report.n_gone} no longer returned"
+    changed = {k: v for k, v in report.species.items() if v.get("new")}
+    per = " · ".join(f"{k} +{v['new']}" for k, v in (changed or report.species).items())
+    topic_bit = f"{len(report.topics)} topic{'s' if len(report.topics) != 1 else ''} ({', '.join(report.topics)}) · " if report.topics else ""
+    head = (
+        f"recheck {report.date} · {topic_bit}{len(report.species)} topic/species pair{'s' if len(report.species) != 1 else ''}"
+        f" · {report.n_new} new abstract{'s' if report.n_new != 1 else ''} ({per}) · {report.n_gone} no longer returned"
+    )
     if not report.touches and not report.flags:
         return head + f"\nnothing changed for the {report.n_cards_live} live cards"
     lines = [head]

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from . import config, db, graph, ledger
+from . import config, db, graph, ledger, topics
 from .card import Card, apply_steering, dedupe_key, evidence_band, new_card_id
 from .gate import gate_draft
 from .llm import LLM, MockLLM, get_llm
@@ -23,18 +23,23 @@ def ask(
     k: int | None = None,
     use_judge: bool = True,
     retries: int | None = None,
+    topic_keys: list[str] | None = None,
 ) -> Card:
-    species_keys = list(species_keys or config.DEFAULT_SPECIES)
-    index = build_index(conn, species_keys)
+    topic_keys = topics.resolve(topic_keys, conn)
+    species_keys = list(species_keys or topics.species_for(topic_keys, conn))
+    index = build_index(conn, species_keys, topic_keys)
     hits = index.search(query, k=k or config.RETRIEVE_K, species_keys=species_keys)
     if not hits:
-        raise NoEvidence(f"no abstracts matched {query!r} in {species_keys}; run `cora ingest` first?")
+        raise NoEvidence(
+            f"no abstracts matched {query!r} in {', '.join(topic_keys)} ({len(species_keys)} species);"
+            " run `cora setup` for this topic first?"
+        )
     passages = [
         {"pmid": d["pmid"], "species": d.get("species", []), "title": d.get("title", ""), "abstract": d.get("abstract", "")}
         for d, _ in hits
     ]
     llm = llm or get_llm()
-    draft = llm.draft(query, passages, species_keys)
+    draft = llm.draft(query, passages, species_keys, topic_keys)
 
     # 1. Quotes: the mechanical gate checks against the WHOLE corpus.
     cited = [e.pmid for e in draft.evidence] + ([draft.nearest_prior_pmid] if draft.nearest_prior_pmid else [])
@@ -61,7 +66,7 @@ def ask(
 
     # 3. Everything below is computed by Cora, never asserted by a model.
     band = evidence_band(filtered.evidence, docs_map)
-    why, flags = apply_steering(band, db.count_docs_by_species(conn), species_keys)
+    why, flags = apply_steering(band, db.count_docs_by_species(conn, topic_keys), species_keys)
     if not filtered.evidence:
         status = "ungrounded"
     elif pc.passed:
@@ -75,11 +80,12 @@ def ask(
     supported_species = sorted({s.species_key for s in filtered.species_support})
     convergence = None
     if graph.findings_count(conn):
-        convergence = graph.card_convergence(conn, filtered.pattern)
+        convergence = graph.card_convergence(conn, filtered.pattern, topic_keys=topic_keys)
     card = Card(
         id=new_card_id(),
         created_at=db.now_iso(),
         query=query,
+        topics=topic_keys,
         species_scope=species_keys,
         draft=filtered,
         gate=summary,
@@ -95,5 +101,5 @@ def ask(
     ledger.insert(conn, card)
     db.log_gate(conn, card.id, summary.n_items, summary.n_passed, [f["reason"] for f in summary.failed])
     db.log_pattern(conn, card.id, pc)
-    db.log_event(conn, "ask", {"card_id": card.id, "llm": getattr(llm, "name", "?"), "judge": getattr(active_judge, "name", None), "n_passages": len(passages)})
+    db.log_event(conn, "ask", {"card_id": card.id, "topics": topic_keys, "llm": getattr(llm, "name", "?"), "judge": getattr(active_judge, "name", None), "n_passages": len(passages)})
     return card

@@ -37,11 +37,11 @@ DOCS = [
 ]
 
 
-def seed_corpus(conn):
+def seed_corpus(conn, topic_key="aging"):
     for d in DOCS:
         doc = {k: v for k, v in d.items() if k != "species"}
         doc["retrieved_at"] = "2026-09-08T00:00:00+00:00"
-        db.upsert_doc(conn, doc, d["species"])
+        db.upsert_doc(conn, doc, d["species"], topic_key=topic_key)
     conn.commit()
 
 

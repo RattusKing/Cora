@@ -95,6 +95,7 @@ class Card(BaseModel):
     id: str
     created_at: str
     query: str
+    topics: list[str] = []  # which topic packs this card was asked within
     species_scope: list[str]
     draft: CardDraft  # evidence already filtered to gate-passing items
     gate: GateSummary

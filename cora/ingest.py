@@ -1,5 +1,8 @@
 """PubMed ingestion via NCBI E-utilities (stdlib only).
 
+- One query per (topic, species) pair: the species' binomial query AND the topic's terms
+  (see config.SPECIES and cora/topics.py). The same paper can arrive under several topics;
+  it is stored once and linked to each.
 - Queries by binomial / genus only (see config.SPECIES).
 - Saves the raw efetch XML to a snapshot directory *before* parsing, so an eval can be
   run against exactly the records that were downloaded, never a re-fetch.
@@ -18,7 +21,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from . import config, db
+from . import config, db, topics
 
 BATCH = 200
 FLAG_REF_TYPES = ("RetractionIn", "ErratumIn", "ExpressionOfConcernIn", "RetractionOf")
@@ -46,8 +49,10 @@ def _params(extra: dict) -> str:
     return urllib.parse.urlencode(p)
 
 
-def build_query(species: config.Species) -> str:
-    return f"{species.query} AND {config.AGING_TERMS}"
+def build_query(species: config.Species, topic: topics.Topic | None = None) -> str:
+    """The PubMed term for one (topic, species) pair."""
+    topic = topic or topics.BUILTIN[topics.DEFAULT_TOPIC]
+    return topic.query(species.query, species.key)
 
 
 def esearch(term: str, retmax: int = 10000) -> list[str]:
@@ -168,66 +173,135 @@ def save_manifest(manifest: dict, path: Path | None = None) -> Path:
 
 def _empty_manifest() -> dict:
     return {
-        "note": "PMID lists per species with the exact query and dates. Raw XML lives in the (uncommitted) snapshot dir.",
-        "species": {},
+        "note": "PMID lists per topic/species pair with the exact query and dates. Raw XML lives in the (uncommitted) snapshot dir.",
+        "pairs": {},
+        "species": {},  # legacy, pre-topics: aging only. Read, never written.
         "runs": [],
     }
 
 
+def pair_id(topic_key: str, species_key: str) -> str:
+    return f"{topic_key}/{species_key}"
+
+
+def _snapshot_tag(topic_key: str, species_key: str) -> str:
+    return f"{topic_key}_{species_key}"
+
+
 # --- full ingest ------------------------------------------------------------
 
-def ingest_species(conn, species: config.Species, retmax: int = 10000, log=print, search_fn=None, fetch_fn=None) -> dict:
-    """Fetch, snapshot, parse and store ALL aging-related abstracts for one species."""
-    term = build_query(species)
+def ingest_species(
+    conn,
+    species: config.Species,
+    topic: topics.Topic,
+    retmax: int = 10000,
+    log=print,
+    search_fn=None,
+    fetch_fn=None,
+) -> dict:
+    """Fetch, snapshot, parse and store every abstract for one (topic, species) pair."""
+    term = build_query(species, topic)
+    tag = _snapshot_tag(topic.key, species.key)
     pmids = search_fn(term) if search_fn else esearch(term, retmax=retmax)
-    log(f"[{species.key}] {len(pmids)} PMIDs for: {term}")
-    docs = (fetch_fn or fetch_docs)(pmids, species.key, log=log) if pmids else []
+    log(f"[{tag}] {len(pmids)} PMIDs for: {term}")
+    docs = (fetch_fn or fetch_docs)(pmids, tag, log=log) if pmids else []
     for d in docs:
-        db.upsert_doc(conn, d, species.key)
+        db.upsert_doc(conn, d, species.key, topic_key=topic.key)
     conn.commit()
-    return {"species": species.key, "query": term, "pmids": pmids, "stored": len(docs), "dropped_no_abstract": len(pmids) - len(docs), "date": db.today()}
+    db.record_ingest(conn, topic.key, species.key, term, len(pmids), len(docs))
+    return {
+        "topic": topic.key, "species": species.key, "query": term, "pmids": pmids,
+        "stored": len(docs), "dropped_no_abstract": len(pmids) - len(docs), "date": db.today(),
+    }
 
 
-def ingest_all(conn, species_keys: list[str], log=print, search_fn=None, fetch_fn=None) -> list[dict]:
+def ingest_all(
+    conn,
+    species_keys: list[str] | None = None,
+    log=print,
+    search_fn=None,
+    fetch_fn=None,
+    topic_keys: list[str] | None = None,
+    pairs: list[tuple[str, str]] | None = None,
+) -> list[dict]:
+    """Ingest a set of (topic, species) pairs.
+
+    `pairs` is explicit; otherwise the pairs are every species of every given topic,
+    optionally narrowed to `species_keys`.
+    """
+    registry = topics.all_topics(conn)
+    if pairs is None:
+        tks = topics.resolve(topic_keys, conn)
+        pairs = topics.pairs(tks, species_keys, conn)
     results = []
     manifest = load_manifest() or _empty_manifest()
-    for key in species_keys:
-        sp = config.SPECIES[key]
-        r = ingest_species(conn, sp, log=log, search_fn=search_fn, fetch_fn=fetch_fn)
+    manifest.setdefault("pairs", {})
+    for tk, sk in pairs:
+        r = ingest_species(conn, config.SPECIES[sk], registry[tk], log=log, search_fn=search_fn, fetch_fn=fetch_fn)
         results.append(r)
-        manifest["species"][key] = {
-            "query": r["query"], "date": r["date"], "updated": r["date"],
+        manifest["pairs"][pair_id(tk, sk)] = {
+            "topic": tk, "species": sk, "query": r["query"], "date": r["date"], "updated": r["date"],
             "n_pmids": len(r["pmids"]), "stored": r["stored"], "pmids": r["pmids"],
         }
-    manifest.setdefault("runs", []).append({"date": db.today(), "kind": "ingest", "species": species_keys, "stored": sum(r["stored"] for r in results)})
+    stored = sum(r["stored"] for r in results)
+    manifest.setdefault("runs", []).append(
+        {"date": db.today(), "kind": "ingest", "pairs": [pair_id(t, s) for t, s in pairs], "stored": stored}
+    )
     save_manifest(manifest)
-    db.log_event(conn, "ingest", {"species": species_keys, "stored": sum(r["stored"] for r in results)})
+    db.log_event(conn, "ingest", {"pairs": [pair_id(t, s) for t, s in pairs], "stored": stored})
     return results
 
 
 # --- incremental update (used by the re-check) --------------------------------
 
-def known_pmids(conn, species_key: str, manifest: dict | None) -> set[str]:
-    """PMIDs we already have for a species: the manifest's list, or the DB if no manifest."""
-    if manifest and species_key in manifest.get("species", {}):
-        return set(manifest["species"][species_key].get("pmids", []))
-    rows = conn.execute("SELECT pmid FROM doc_species WHERE species_key = ?", (species_key,)).fetchall()
+def known_pmids(conn, species_key: str, manifest: dict | None, topic_key: str = topics.DEFAULT_TOPIC) -> set[str]:
+    """PMIDs we already have for a (topic, species) pair: the manifest's list, else the DB.
+
+    A manifest written before topics existed holds aging PMIDs under "species"; it is read
+    for the aging topic so an existing install is not re-downloaded.
+    """
+    if manifest:
+        entry = manifest.get("pairs", {}).get(pair_id(topic_key, species_key))
+        if entry is None and topic_key == topics.DEFAULT_TOPIC:
+            entry = manifest.get("species", {}).get(species_key)
+        if entry is not None:
+            return set(entry.get("pmids", []))
+    rows = conn.execute(
+        """SELECT ds.pmid FROM doc_species ds JOIN doc_topic dt ON dt.pmid = ds.pmid
+           WHERE ds.species_key = ? AND dt.topic_key = ?""",
+        (species_key, topic_key),
+    ).fetchall()
     return {r["pmid"] for r in rows}
 
 
-def update_species(conn, species: config.Species, manifest: dict | None, log=print, search_fn=None, fetch_fn=None) -> dict:
-    """Search again, fetch only unseen PMIDs, store them. Returns the diff."""
-    term = build_query(species)
+def update_species(
+    conn,
+    species: config.Species,
+    manifest: dict | None,
+    topic: topics.Topic | None = None,
+    log=print,
+    search_fn=None,
+    fetch_fn=None,
+) -> dict:
+    """Search again for one (topic, species) pair, fetch only unseen PMIDs. Returns the diff."""
+    topic = topic or topics.BUILTIN[topics.DEFAULT_TOPIC]
+    term = build_query(species, topic)
+    tag = _snapshot_tag(topic.key, species.key)
     current = (search_fn or esearch)(term)
-    old = known_pmids(conn, species.key, manifest)
+    old = known_pmids(conn, species.key, manifest, topic.key)
     new = [p for p in current if p not in old]
     gone = sorted(old - set(current))
-    docs = (fetch_fn or fetch_docs)(new, species.key, log=log) if new else []
+    docs = (fetch_fn or fetch_docs)(new, tag, log=log) if new else []
     for d in docs:
-        db.upsert_doc(conn, d, species.key)
+        db.upsert_doc(conn, d, species.key, topic_key=topic.key)
     conn.commit()
-    log(f"[{species.key}] {len(current)} PMIDs now; {len(new)} new, {len(gone)} no longer returned; stored {len(docs)}")
-    return {"species": species.key, "query": term, "pmids": current, "new": new, "gone": gone, "stored": len(docs), "docs": docs, "date": db.today()}
+    if new:
+        db.record_ingest(conn, topic.key, species.key, term, len(current), len(docs))
+    log(f"[{tag}] {len(current)} PMIDs now; {len(new)} new, {len(gone)} no longer returned; stored {len(docs)}")
+    return {
+        "topic": topic.key, "species": species.key, "query": term, "pmids": current, "new": new,
+        "gone": gone, "stored": len(docs), "docs": docs, "date": db.today(),
+    }
 
 
 def fetch_flags(pmids: list[str], fetch_fn=None, log=print) -> dict[str, list[str]]:

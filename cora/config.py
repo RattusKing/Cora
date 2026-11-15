@@ -1,8 +1,12 @@
-"""Configuration: species panel, PubMed query terms, paths, steering rules.
+"""Configuration: species registry, paths, steering rules.
 
-Species are queried by binomial (or genus) name only. Common names are deliberately
-avoided in queries: "quahog" pulls *Mercenaria mercenaria* (a different, short-lived
-clam), "killifish" pulls *Fundulus*, and "rockfish" pulls Chesapeake striped bass.
+Species are queried by binomial (or genus) name only, with a common name added only where
+it is unambiguous. Common names are otherwise deliberately avoided: "quahog" pulls
+*Mercenaria mercenaria* (a different, short-lived clam), "killifish" pulls *Fundulus*, and
+"rockfish" pulls Chesapeake striped bass.
+
+Which species are in play is a property of the *topic*, not of this file - see
+cora/topics.py. This module is the registry of species Cora knows how to query.
 """
 
 from __future__ import annotations
@@ -45,92 +49,259 @@ class Species:
     binomial: str
     query: str  # PubMed query fragment - binomial / genus / unambiguous names only
     taxid: int | None = None
+    class_: str = ""  # taxonomic class - the default lineage proxy
+    phylum: str = ""  # taxonomic phylum - the coarse proxy for panels spanning phyla
 
+
+TA = "[Title/Abstract]"
+
+
+def _or(*names: str) -> str:
+    """A Title/Abstract OR-group. Multi-word and hyphenated names become quoted phrases.
+
+    Single bare words are risky: PubMed maps `bats` to BAT (brown adipose tissue) among
+    other things, so groups of ambiguous common names are built from genera instead.
+    """
+    return "(" + " OR ".join(f'"{n}"{TA}' if (" " in n or "-" in n) else f"{n}{TA}" for n in names) + ")"
+
+
+_BAT_GENERA = ("Myotis", "Rhinolophus", "Pteropus", "Desmodus", "Eptesicus", "Nyctalus",
+               "Miniopterus", "Carollia", "Artibeus", "Tadarida", "Hipposideros", "Rousettus")
 
 SPECIES: dict[str, Species] = {
+    # --- aging panel (the original, verified against real abstracts) ---------------
     "naked_mole_rat": Species(
         key="naked_mole_rat",
         name="naked mole-rat",
         binomial="Heterocephalus glaber",
         taxid=10181,
-        query=(
-            '("Heterocephalus glaber"[Title/Abstract] OR "naked mole-rat"[Title/Abstract]'
-            ' OR "naked mole rat"[Title/Abstract] OR "naked mole-rats"[Title/Abstract])'
-        ),
+        query=_or("Heterocephalus glaber", "naked mole-rat", "naked mole rat", "naked mole-rats"),
+        class_="Mammalia", phylum="Chordata",
     ),
     "ocean_quahog": Species(
         key="ocean_quahog",
         name="ocean quahog",
         binomial="Arctica islandica",
-        query='"Arctica islandica"[Title/Abstract]',
+        query=_or("Arctica islandica"),
+        class_="Bivalvia", phylum="Mollusca",
     ),
     "rockfish": Species(
         key="rockfish",
         name="rockfish (Sebastes)",
         binomial="Sebastes",
-        query="Sebastes[Title/Abstract]",
+        query=_or("Sebastes"),
+        class_="Actinopterygii", phylum="Chordata",
     ),
-    # Available, off by default for P0.5 (pass --species to include):
     "bowhead_whale": Species(
         key="bowhead_whale",
         name="bowhead whale",
         binomial="Balaena mysticetus",
-        query='("Balaena mysticetus"[Title/Abstract] OR "bowhead whale"[Title/Abstract])',
+        query=_or("Balaena mysticetus", "bowhead whale"),
+        class_="Mammalia", phylum="Chordata",
     ),
     "greenland_shark": Species(
         key="greenland_shark",
         name="Greenland shark",
         binomial="Somniosus microcephalus",
-        query='("Somniosus microcephalus"[Title/Abstract] OR "Greenland shark"[Title/Abstract])',
+        query=_or("Somniosus microcephalus", "Greenland shark"),
+        class_="Chondrichthyes", phylum="Chordata",
     ),
     "hydra": Species(
         key="hydra",
         name="hydra",
         binomial="Hydra",
-        query='("Hydra vulgaris"[Title/Abstract] OR "Hydra oligactis"[Title/Abstract] OR "Hydra magnipapillata"[Title/Abstract])',
+        query=_or("Hydra vulgaris", "Hydra oligactis", "Hydra magnipapillata"),
+        class_="Hydrozoa", phylum="Cnidaria",
     ),
     "turritopsis": Species(
         key="turritopsis",
         name="immortal jellyfish",
         binomial="Turritopsis dohrnii",
-        query='("Turritopsis dohrnii"[Title/Abstract] OR "Turritopsis nutricula"[Title/Abstract])',
+        query=_or("Turritopsis dohrnii", "Turritopsis nutricula"),
+        class_="Hydrozoa", phylum="Cnidaria",
     ),
     "killifish": Species(
         key="killifish",
         name="African turquoise killifish",
         binomial="Nothobranchius furzeri",
-        query='"Nothobranchius furzeri"[Title/Abstract]',
+        query=_or("Nothobranchius furzeri"),
+        class_="Actinopterygii", phylum="Chordata",
+    ),
+    # --- regeneration panel -------------------------------------------------------
+    "axolotl": Species(
+        key="axolotl",
+        name="axolotl",
+        binomial="Ambystoma mexicanum",
+        query=_or("Ambystoma mexicanum", "axolotl", "axolotls"),
+        class_="Amphibia", phylum="Chordata",
+    ),
+    "newt": Species(
+        key="newt",
+        name="newt (Notophthalmus / Pleurodeles / Cynops)",
+        binomial="Notophthalmus viridescens",
+        query=_or("Notophthalmus viridescens", "Pleurodeles waltl", "Cynops pyrrhogaster"),
+        class_="Amphibia", phylum="Chordata",
+    ),
+    "zebrafish": Species(
+        key="zebrafish",
+        name="zebrafish",
+        binomial="Danio rerio",
+        query=_or("Danio rerio", "zebrafish"),
+        class_="Actinopterygii", phylum="Chordata",
+    ),
+    "planarian": Species(
+        key="planarian",
+        name="planarian flatworm",
+        binomial="Schmidtea mediterranea",
+        query=_or("Schmidtea mediterranea", "Dugesia japonica"),
+        class_="Rhabditophora", phylum="Platyhelminthes",
+    ),
+    "spiny_mouse": Species(
+        key="spiny_mouse",
+        name="African spiny mouse",
+        binomial="Acomys cahirinus",
+        query=_or("Acomys", "spiny mouse", "spiny mice"),
+        class_="Mammalia", phylum="Chordata",
+    ),
+    "acoel": Species(
+        key="acoel",
+        name="three-banded panther worm",
+        binomial="Hofstenia miamia",
+        query=_or("Hofstenia miamia"),
+        class_="Acoela", phylum="Xenacoelomorpha",
+    ),
+    "deer": Species(
+        key="deer",
+        name="deer (antler regeneration)",
+        binomial="Cervus elaphus",
+        query=f"{_or('Cervus elaphus', 'Cervus nippon')} AND antler*{TA}",
+        class_="Mammalia", phylum="Chordata",
+    ),
+    # --- cancer-resistance panel --------------------------------------------------
+    "blind_mole_rat": Species(
+        key="blind_mole_rat",
+        name="blind mole-rat (Spalax)",
+        binomial="Nannospalax galili",
+        query=_or("Spalax", "Nannospalax", "blind mole rat", "blind mole-rat", "blind mole rats", "blind mole-rats"),
+        class_="Mammalia", phylum="Chordata",
+    ),
+    "elephant": Species(
+        key="elephant",
+        name="elephant",
+        binomial="Loxodonta africana",
+        query=_or("Loxodonta africana", "Elephas maximus", "Loxodonta", "African elephant", "Asian elephant", "elephants"),
+        class_="Mammalia", phylum="Chordata",
+    ),
+    "bats": Species(
+        key="bats",
+        name="bats (Chiroptera)",
+        binomial="Myotis lucifugus",
+        # MeSH plus genera: a bare "bats" maps to BAT (brown adipose tissue) and pulls noise.
+        query="(Chiroptera[MeSH Terms] OR Chiroptera" + TA + " OR " + " OR ".join(g + TA for g in _BAT_GENERA) + ")",
+        class_="Mammalia", phylum="Chordata",
+    ),
+    # --- low-oxygen panel ---------------------------------------------------------
+    "painted_turtle": Species(
+        key="painted_turtle",
+        name="painted turtle",
+        binomial="Chrysemys picta",
+        query=_or("Chrysemys picta", "painted turtle", "painted turtles"),
+        class_="Reptilia", phylum="Chordata",
+    ),
+    "red_eared_slider": Species(
+        key="red_eared_slider",
+        name="red-eared slider",
+        binomial="Trachemys scripta",
+        query=_or("Trachemys scripta", "red-eared slider", "red-eared sliders"),
+        class_="Reptilia", phylum="Chordata",
+    ),
+    "crucian_carp": Species(
+        key="crucian_carp",
+        name="crucian carp",
+        binomial="Carassius carassius",
+        query=_or("Carassius carassius"),
+        class_="Actinopterygii", phylum="Chordata",
+    ),
+    "weddell_seal": Species(
+        key="weddell_seal",
+        name="Weddell seal",
+        binomial="Leptonychotes weddellii",
+        query=_or("Leptonychotes weddellii", "Weddell seal", "Weddell seals"),
+        class_="Mammalia", phylum="Chordata",
+    ),
+    "bar_headed_goose": Species(
+        key="bar_headed_goose",
+        name="bar-headed goose",
+        binomial="Anser indicus",
+        query=_or("Anser indicus", "bar-headed goose", "bar-headed geese"),
+        class_="Aves", phylum="Chordata",
+    ),
+    "epaulette_shark": Species(
+        key="epaulette_shark",
+        name="epaulette shark",
+        binomial="Hemiscyllium ocellatum",
+        query=_or("Hemiscyllium ocellatum", "epaulette shark"),
+        class_="Chondrichthyes", phylum="Chordata",
+    ),
+    # --- hibernation panel --------------------------------------------------------
+    "ground_squirrel": Species(
+        key="ground_squirrel",
+        name="thirteen-lined ground squirrel",
+        binomial="Ictidomys tridecemlineatus",
+        query=_or("Ictidomys tridecemlineatus", "Spermophilus tridecemlineatus",
+                  "thirteen-lined ground squirrel", "thirteen-lined ground squirrels",
+                  "13-lined ground squirrel", "13-lined ground squirrels"),
+        class_="Mammalia", phylum="Chordata",
+    ),
+    "arctic_ground_squirrel": Species(
+        key="arctic_ground_squirrel",
+        name="arctic ground squirrel",
+        binomial="Urocitellus parryii",
+        query=_or("Urocitellus parryii", "Spermophilus parryii", "arctic ground squirrel", "arctic ground squirrels"),
+        class_="Mammalia", phylum="Chordata",
+    ),
+    "bear": Species(
+        key="bear",
+        name="bear (brown / American black)",
+        binomial="Ursus arctos",
+        query=_or("Ursus arctos", "Ursus americanus", "brown bear", "brown bears", "black bear", "black bears"),
+        class_="Mammalia", phylum="Chordata",
+    ),
+    "dwarf_lemur": Species(
+        key="dwarf_lemur",
+        name="fat-tailed dwarf lemur",
+        binomial="Cheirogaleus medius",
+        query=_or("Cheirogaleus medius", "Cheirogaleus", "dwarf lemur", "dwarf lemurs"),
+        class_="Mammalia", phylum="Chordata",
+    ),
+    "wood_frog": Species(
+        key="wood_frog",
+        name="wood frog",
+        binomial="Lithobates sylvaticus",
+        query=_or("Lithobates sylvaticus", "Rana sylvatica", "wood frog", "wood frogs"),
+        class_="Amphibia", phylum="Chordata",
     ),
 }
 
-# The full panel is the default (the red-team's Phase 1 corpus). The original three-species
-# P0.5 panel is kept for reference.
-DEFAULT_SPECIES: list[str] = list(SPECIES)
+# The aging panel, kept as a named list: it is the corpus every published Cora number so
+# far was measured on. Which species are actually in play comes from the enabled topics
+# (cora/topics.py), not from this file.
+AGING_SPECIES: list[str] = [
+    "naked_mole_rat", "ocean_quahog", "rockfish", "bowhead_whale",
+    "greenland_shark", "hydra", "turritopsis", "killifish",
+]
+DEFAULT_SPECIES: list[str] = AGING_SPECIES  # back-compat alias for callers without a topic
 P05_SPECIES: list[str] = ["naked_mole_rat", "ocean_quahog", "rockfish"]
 
 # AnAge (HAGR), CC BY 3.0.
 ANAGE_URL = "https://genomics.senescence.info/species/dataset.zip"
 
-# Coarse lineage proxy for convergence until a species tree is loaded: taxonomic class.
-# Two mammals are ONE lineage; that is the point.
-SPECIES_CLASS: dict[str, str] = {
-    "naked_mole_rat": "Mammalia",
-    "bowhead_whale": "Mammalia",
-    "rockfish": "Actinopterygii",
-    "killifish": "Actinopterygii",
-    "ocean_quahog": "Bivalvia",
-    "greenland_shark": "Chondrichthyes",
-    "hydra": "Hydrozoa",
-    "turritopsis": "Hydrozoa",
-}
+# Coarse lineage proxy for convergence until a species tree is loaded: a taxonomic rank.
+# Two mammals are ONE lineage at class rank; that is the point. A topic picks its rank
+# (cora/topics.py); these maps are the lookup.
+SPECIES_CLASS: dict[str, str] = {k: sp.class_ for k, sp in SPECIES.items()}
+SPECIES_PHYLUM: dict[str, str] = {k: sp.phylum for k, sp in SPECIES.items()}
 GRAPH_PERMUTATIONS = int(os.environ.get("CORA_GRAPH_PERMUTATIONS", "200"))
-
-AGING_TERMS = (
-    "(aging[Title/Abstract] OR ageing[Title/Abstract] OR aging[MeSH Terms]"
-    " OR longevity[Title/Abstract] OR longevity[MeSH Terms]"
-    " OR senescence[Title/Abstract] OR lifespan[Title/Abstract]"
-    ' OR "life span"[Title/Abstract])'
-)
 
 # --- paths ---------------------------------------------------------------
 DATA_DIR = Path(os.environ.get("CORA_DATA_DIR", "data"))

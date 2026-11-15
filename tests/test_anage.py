@@ -88,8 +88,9 @@ def test_longevity_quotient(conn):
 
 def test_panel_summary_and_render(conn):
     anage.load(conn, rows=anage.parse(_fixture()))
-    rows = anage.panel_summary(conn)
-    assert [r["key"] for r in rows] == list(config.SPECIES)
+    rows = anage.panel_summary(conn)  # scoped to the enabled topic (aging)
+    assert [r["key"] for r in rows] == config.AGING_SPECIES
+    assert all(r["topics"] == ["aging"] for r in rows)
     nmr = next(r for r in rows if r["key"] == "naked_mole_rat")
     assert nmr["docs"] == 2 and nmr["anage"]["max_longevity_yrs"] == 37.0 and nmr["lq"] is not None
     shark = next(r for r in rows if r["key"] == "greenland_shark")
@@ -98,6 +99,29 @@ def test_panel_summary_and_render(conn):
     assert "naked_mole_rat" in text and "no AnAge record" in text and "naive" in text
 
 
-def test_full_panel_is_the_default():
-    assert config.DEFAULT_SPECIES == list(config.SPECIES) and len(config.DEFAULT_SPECIES) == 8
+def test_aging_panel_is_unchanged_by_the_other_topics():
+    from cora import topics
+
+    assert len(config.AGING_SPECIES) == 8
+    assert topics.BUILTIN["aging"].species == tuple(config.AGING_SPECIES)
+    assert config.DEFAULT_SPECIES == config.AGING_SPECIES  # back-compat alias
     assert config.P05_SPECIES == ["naked_mole_rat", "ocean_quahog", "rockfish"]
+    # every species the other topics add is a new key, so the aging corpus is untouched
+    assert len(config.SPECIES) > 8 and set(config.AGING_SPECIES) <= set(config.SPECIES)
+
+
+def test_panel_summary_follows_the_topic(conn):
+    from cora import topics
+
+    rows = anage.panel_summary(conn, topic_keys=["hibernation"])
+    assert [r["key"] for r in rows] == list(topics.BUILTIN["hibernation"].species)
+    assert all(r["docs"] == 0 for r in rows)  # nothing ingested for that topic in this fixture
+
+
+def test_render_aligns_long_species_keys(conn):
+    rows = anage.panel_summary(conn, species_keys=["arctic_ground_squirrel", "bear"])
+    text = anage.render_summary(rows)
+    header, *body = text.splitlines()
+    col = header.index("docs")
+    for line in body[:-1]:
+        assert line[:col].strip() in ("arctic_ground_squirrel", "bear")  # the name never spills

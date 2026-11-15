@@ -70,7 +70,7 @@ def test_convergence_counts_lineages_not_species(conn):
 
 def test_same_class_species_are_one_lineage(conn):
     # add a bowhead doc mentioning hypoxia: Mammalia again -> species 3, lineages still 2
-    db.upsert_doc(conn, {"pmid": "4000001", "title": "Bowhead diving", "abstract": "Bowhead whales tolerate hypoxia during prolonged dives, and hypoxia tolerance is associated with high myoglobin.", "retrieved_at": "x", "pub_types": ["Journal Article"]}, "bowhead_whale")
+    db.upsert_doc(conn, {"pmid": "4000001", "title": "Bowhead diving", "abstract": "Bowhead whales tolerate hypoxia during prolonged dives, and hypoxia tolerance is associated with high myoglobin.", "retrieved_at": "x", "pub_types": ["Journal Article"]}, "bowhead_whale", topic_key="aging")
     conn.commit()
     graph.build(conn, graph.LexiconExtractor(), log=lambda *a, **k: None)
     hyp = {r["mechanism"]: r for r in graph.converge(conn, perms=20)}["hypoxia"]
@@ -78,8 +78,8 @@ def test_same_class_species_are_one_lineage(conn):
 
 
 def test_reviews_and_negatives_do_not_count_as_support(conn):
-    db.upsert_doc(conn, {"pmid": "5000001", "title": "A review", "abstract": "This review summarizes DNA repair in the naked mole-rat and its possible link to longevity.", "retrieved_at": "x", "pub_types": ["Review"]}, "naked_mole_rat")
-    db.upsert_doc(conn, {"pmid": "5000002", "title": "Null result", "abstract": "We found no association between DNA repair capacity and lifespan in Hydra polyps.", "retrieved_at": "x", "pub_types": ["Journal Article"]}, "hydra")
+    db.upsert_doc(conn, {"pmid": "5000001", "title": "A review", "abstract": "This review summarizes DNA repair in the naked mole-rat and its possible link to longevity.", "retrieved_at": "x", "pub_types": ["Review"]}, "naked_mole_rat", topic_key="aging")
+    db.upsert_doc(conn, {"pmid": "5000002", "title": "Null result", "abstract": "We found no association between DNA repair capacity and lifespan in Hydra polyps.", "retrieved_at": "x", "pub_types": ["Journal Article"]}, "hydra", topic_key="aging")
     conn.commit()
     graph.build(conn, graph.LexiconExtractor(), log=lambda *a, **k: None)
     dna = {r["mechanism"]: r for r in graph.converge(conn, perms=20)}["dna_repair"]
@@ -89,7 +89,7 @@ def test_reviews_and_negatives_do_not_count_as_support(conn):
 
 
 def test_min_tier_filters_mentions(conn):
-    db.upsert_doc(conn, {"pmid": "6000001", "title": "Mention only", "abstract": "Telomeres were measured in the Greenland shark as part of a broader survey of tissues.", "retrieved_at": "x", "pub_types": ["Journal Article"]}, "greenland_shark")
+    db.upsert_doc(conn, {"pmid": "6000001", "title": "Mention only", "abstract": "Telomeres were measured in the Greenland shark as part of a broader survey of tissues.", "retrieved_at": "x", "pub_types": ["Journal Article"]}, "greenland_shark", topic_key="aging")
     conn.commit()
     graph.build(conn, graph.LexiconExtractor(), log=lambda *a, **k: None)
     tel_mention = {r["mechanism"]: r for r in graph.converge(conn, min_tier="mention", perms=0)}["telomere"]
@@ -111,6 +111,7 @@ def test_mechanism_detail_and_render(conn):
     assert {d["species_key"] for d in detail} == {"naked_mole_rat", "ocean_quahog"} and all(d["quote"] for d in detail)
     text = graph.render_convergence(graph.converge(conn, perms=10), min_lineages=2)
     assert "hypoxia" in text and "lineage = taxonomic class" in text
+    # the aging panel spans 5 classes, so 5 is reachable in principle: a plain "none reached it"
     assert "no mechanism reaches 5" in graph.render_convergence(graph.converge(conn, perms=10), min_lineages=5)
 
 
@@ -127,3 +128,85 @@ def test_card_gets_convergence_for_mechanisms_it_names(conn):
 def test_no_findings_means_no_convergence_field(conn):
     card = generate.ask(conn, "hypoxia tolerance", species_keys=["naked_mole_rat"], llm=MockLLM())
     assert card.convergence is None
+
+
+def test_findings_are_scoped_to_the_topics_vocabulary(conn):
+    """A mechanism outside a topic's vocabulary is never extracted for that topic's docs."""
+    from cora import topics
+
+    graph.build(conn, graph.LexiconExtractor(), log=lambda *a, **k: None)
+    aging_vocab = set(topics.BUILTIN["aging"].mechanisms)
+    stored = {r["mechanism"] for r in graph._load_findings(conn, None, ["aging"])}
+    assert stored and stored <= aging_vocab
+    # "blastema" belongs to regeneration only, so it cannot appear from an aging-only build
+    assert "blastema" not in stored
+
+
+def test_a_single_lineage_panel_says_so_instead_of_reporting_a_null(conn):
+    """Every cancer-resistance species is a mammal: the report must not imply a null result."""
+    db.upsert_doc(conn, {"pmid": "7000001", "title": "Elephant TP53",
+                         "abstract": "Elephants carry about twenty copies of the tumour suppressor TP53, which is associated with resistance to cancer in this lineage.",
+                         "retrieved_at": "x", "pub_types": ["Journal Article"]}, "elephant", topic_key="cancer_resistance")
+    db.upsert_doc(conn, {"pmid": "7000002", "title": "NMR hyaluronan",
+                         "abstract": "High-molecular-mass hyaluronan is associated with cancer resistance in naked mole-rat fibroblasts and early contact inhibition.",
+                         "retrieved_at": "x", "pub_types": ["Journal Article"]}, "naked_mole_rat", topic_key="cancer_resistance")
+    conn.commit()
+    graph.build(conn, graph.LexiconExtractor(), log=lambda *a, **k: None, topic_keys=["cancer_resistance"])
+    rows = graph.converge(conn, perms=20, topic_keys=["cancer_resistance"])
+    assert rows and all(r["panel_lineages"] == 1 for r in rows)
+    text = graph.render_convergence(rows, min_lineages=2)
+    assert "1 taxonomic class-level lineage" in text and "cancer_resistance" in text
+    assert "no mechanism reaches" not in text
+    # the aging build is untouched by a cancer_resistance build
+    assert graph.findings_count(conn, "lexicon-v1") > 0
+
+
+def test_topic_builds_do_not_clobber_each_other(conn):
+    db.upsert_doc(conn, {"pmid": "7000003", "title": "Axolotl blastema",
+                         "abstract": "Blastema formation in the axolotl limb is associated with dedifferentiation of connective tissue cells after amputation.",
+                         "retrieved_at": "x", "pub_types": ["Journal Article"]}, "axolotl", topic_key="regeneration")
+    conn.commit()
+    graph.build(conn, graph.LexiconExtractor(), log=lambda *a, **k: None, topic_keys=["aging"])
+    aging_n = len(graph._load_findings(conn, None, ["aging"]))
+    graph.build(conn, graph.LexiconExtractor(), log=lambda *a, **k: None, topic_keys=["regeneration"])
+    assert len(graph._load_findings(conn, None, ["aging"])) == aging_n  # aging rows survived
+    regen = {r["mechanism"] for r in graph._load_findings(conn, None, ["regeneration"])}
+    assert "blastema" in regen and "dedifferentiation" in regen
+
+
+def test_a_negation_in_another_clause_is_not_a_negative_finding(conn):
+    """"X increased in adipose tissue, but not in liver" is not a negative result for X."""
+    ex = graph.LexiconExtractor()
+    sent = (
+        "AMPK activity was increased 3-fold in white adipose tissue from hibernating ground squirrels "
+        "compared with euthermic controls, but activation was not seen in liver or skeletal muscle."
+    )
+    f = next(x for x in ex.extract(_doc("11", ["ground_squirrel"], sent, pub_types=["Journal Article"]))
+             if x.mechanism == "insulin_resistance")
+    assert f.tier != "tested_negative"
+    assert f.quote == sent  # the whole sentence is still the quote: context is preserved
+    # a negation in the SAME clause as the mechanism still counts
+    neg = "Glucose tolerance was not associated with torpor duration in these animals, although body mass was."
+    g = next(x for x in ex.extract(_doc("12", ["ground_squirrel"], neg, pub_types=["Journal Article"]))
+             if x.mechanism == "insulin_resistance")
+    assert g.tier == "tested_negative"
+
+
+def test_clause_splitting_keeps_single_clause_sentences_intact():
+    ex = graph.LexiconExtractor()
+    sent = "We found no association between DNA repair capacity and lifespan in these polyps."
+    f = next(x for x in ex.extract(_doc("13", ["hydra"], sent)) if x.mechanism == "dna_repair")
+    assert f.tier == "tested_negative" and f.quote == sent
+
+
+def test_render_aligns_long_mechanism_names(conn):
+    graph.build(conn, graph.LexiconExtractor(), log=lambda *a, **k: None)
+    rows = graph.converge(conn, perms=10)
+    rows.append(dict(rows[0], mechanism="muscle_atrophy_resistance", n_lineages=2))
+    text = graph.render_convergence(rows, min_lineages=2)
+    header, *body = [ln for ln in text.splitlines() if ln.strip()]
+    col = header.index("lineages")
+    for line in body:
+        if line.startswith("lineage ="):
+            continue
+        assert line[:col].strip() and not line[:col].rstrip().endswith("2")  # name column is wide enough

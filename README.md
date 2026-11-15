@@ -2,10 +2,11 @@
 
 [![tests](https://github.com/RattusKing/Cora/actions/workflows/tests.yml/badge.svg)](https://github.com/RattusKing/Cora/actions/workflows/tests.yml)
 
-**A citation-gated hypothesis-card tool for the comparative biology of aging.**
+**A citation-gated hypothesis-card tool for comparative biology and human medicine.**
 
-Cora drafts one *hypothesis card* at a time from real PubMed abstracts about long-lived
-species, then checks it twice before it can be believed:
+Cora points at one research question at a time — a **topic** — and drafts one *hypothesis
+card* at a time from real PubMed abstracts about the animals that solved it, then checks the
+card twice before it can be believed:
 
 1. **Every quote goes through a mechanical citation gate.** The PMID must exist in the local
    corpus and the quote must be an exact (normalized) substring of that abstract. Whatever
@@ -19,27 +20,65 @@ The card's evidence band, species support, groundedness and status are computed 
 from what survived, never asserted by the model. Cora is a personal discovery copilot
 first: the design trail in `docs/` explains why it starts small, and what it is meant to grow into.
 
+## Topics
+
+A topic is the question Cora is pointed at: its PubMed search terms, its species panel, its
+mechanism vocabulary, and the lineage rank used for convergence. You pick one or more on
+first run, change them any time with `cora topics`, and add your own.
+
+| Topic | Species | Question |
+|---|---|---|
+| `aging` — Aging & longevity **(ready)** | naked mole-rat, ocean quahog, rockfish, bowhead whale, Greenland shark, hydra, *Turritopsis*, killifish | Which mechanisms let some animals live far longer than their body size predicts? |
+| `regeneration` — Regeneration & wound repair | axolotl, newt, zebrafish, planarian, spiny mouse, hydra, *Hofstenia*, deer antler | How do animals regrow tissue without scarring? |
+| `cancer_resistance` — Cancer resistance | naked mole-rat, blind mole-rat, elephant, bowhead whale, bats | Why do some large or long-lived animals almost never get cancer (Peto's paradox)? |
+| `hypoxia` — Low-oxygen tolerance | naked mole-rat, painted turtle, red-eared slider, crucian carp, Weddell seal, bar-headed goose, epaulette shark | How do animals survive hours to months without oxygen? |
+| `hibernation` — Hibernation & metabolism | 13-lined and arctic ground squirrel, bear, dwarf lemur, bats, wood frog | How do hibernators drop their metabolism for months without losing muscle or bone? |
+
+Only `aging` is marked **ready**: its mechanism lexicon has been checked against hundreds of
+real abstracts. The other four are labelled **beta** until the same check is done, and
+`cora topics` says so. A species can belong to several topics; the same paper is stored once
+and linked to each topic that found it, and every count is per topic.
+
+```bash
+cora topics                      # what exists, what is enabled, what is ingested
+cora topics --set 1 3            # enable topics by number (or by key)
+cora topics --add                # add your own topic; checks each species against PubMed first
+cora topics --export aging > aging.json     # share or edit a topic as JSON
+cora setup                       # fetch whatever the enabled topics still need
+```
+
+**Adding your own topic.** `cora topics --add` asks for a key, a name, a one-line question,
+species keys, mechanism keys and the PubMed terms, then runs one search per species and
+prints the hit count *before* storing anything — a zero usually means a misspelled binomial.
+Custom topics live in your database and export as JSON. The scope is animal traits → human
+health; Cora is not a tool for making anything more dangerous.
+
 ## Status
 
 | Piece | State |
 |---|---|
-| Design trail (`docs/`) | Feasibility study, architecture, Phase 1–4 specs, and a four-angle red-team whose corrections are folded into every spec (marked `[RT]`) |
+| Design trail (`docs/`) | Feasibility study, architecture, Phase 1–4 specs, a four-angle red-team whose corrections are folded into every spec (marked `[RT]`), and `Cora-Topics.md` for the topic-pack design |
 | P0.5 build | Done and merged: ingest, mechanical gate, cards, ledger, metrics, CLI, web UI, eval harness |
 | Phase 1, first item | Done and merged: the pattern-line gate (mechanical check + independent judge + one rewrite) and `cora label` |
 | Weekly re-check | Done: `cora recheck` fetches only new abstracts, flags retracted or corrected sources that live cards cite, and reports what changed per card. No model calls |
-| Full panel + AnAge | Done: all eight species are the default panel; `cora anage` loads the AnAge table (4,645 species) and `cora species` shows each panel species' maximum longevity with its data quality, sample size and specimen origin, body mass, and a naive longevity quotient |
+| Full panel + AnAge | Done: all eight aging species are that topic's panel; `cora anage` loads the AnAge table (4,645 species) and `cora species` shows each panel species' maximum longevity with its data quality, sample size and specimen origin, body mass, and a naive longevity quotient. AnAge covers lifespan only, so it backs the `aging` topic; the other topics have no trait table yet and say so |
+| Topic packs | Done: five built-in topics (aging, regeneration, cancer resistance, low-oxygen tolerance, hibernation) plus custom topics. One PubMed query per (topic, species) pair; abstracts, cards, findings and convergence are all scoped to the topics you enable; `cora topics` picks them; a pre-topics database is migrated to `aging` without re-downloading anything |
 | Graph-lite convergence | Done: `cora graph build` turns every abstract into gate-verified **findings** (species × mechanism × tier × direction, verbatim quote, primary vs review); `cora graph converge` ranks mechanisms by independent lineages with a **permutation p-value**; cards carry computed convergence for the mechanisms their pattern names. First real run: broad mechanisms reach all five lineages but **none beats the null**, which is the honest answer for lexicon matches over abstracts |
-| Tests | 95 passing on Python 3.10–3.13; no network, no credentials. GitHub Actions runs them on every pull request and every push to `main` |
-| One-command setup | `cora setup` runs init, PubMed ingest, AnAge, graph build and a canary check, reports each step, and is safe to re-run. Fresh install against live services: about 20 seconds; re-run: under 2 seconds |
-| Real-data checks | October 2026 fresh install of the full panel: 654 unique abstracts (a paper about two species counts once), AnAge 4,645 rows with six of eight panel species matched (hydra and *Turritopsis* have no AnAge record), 1,696 findings with 0 dropped by the gate, canaries 95 of 95 known-bad caught and 20 of 20 known-good passed. The first full-panel re-check found a real erratum on a source a card cites. Mock cards gate cleanly |
+| Tests | 124 passing on Python 3.10–3.13; no network, no credentials. GitHub Actions runs them on every pull request and every push to `main` |
+| One-command setup | `cora setup` picks topics on first run, then runs PubMed ingest, AnAge, graph build and a canary check, reports each step, and is safe to re-run. Re-run: about 1 second |
+| Real-data checks | November 2026, all five topics against live PubMed: **6,553 unique abstracts** over 34 topic/species pairs (aging 662, regeneration 3,593, hibernation 1,535, low-oxygen 558, cancer resistance 422; a paper two topics both find is stored once), **34,725 findings with 0 dropped by the gate**, canaries 96 of 96 known-bad caught and 20 of 20 known-good passed. The aging topic alone reproduces at 662 abstracts / 1,776 findings, and still **no mechanism beats the null** (lowest permutation p = 0.46). A fresh single-topic install takes about 3 minutes of PubMed fetching; a re-run about 1 second. Reviewing the new lexicons on those abstracts found and fixed two real bugs (below). AnAge 4,645 rows. Mock cards gate cleanly in every topic |
+| Lexicon review (the new topics) | Sampling real findings for all 19 new mechanism keys found two defects, both fixed: (1) a negation in **one clause** marked the whole sentence negative — "AMPK increased in adipose tissue, *but* not in liver" was recorded as a negative result for adipose tissue; tier and direction are now read from the clause that contains the mechanism, which cut mixed-sentence negatives from 45% to 29% of all negatives, the remainder being genuine; (2) a bare "nitrogen balance" pattern matched brain glutamine metabolism, not muscle sparing. The four new lexicons stay **beta** until they have been used |
 | **Not yet verified** | **Live model calls.** The build environment had no credentials, so real drafting, the real judge, and the rewrite have never been run against the API. They follow the documented structured-output call shape and fail with a clear message when credentials are missing |
 
 **What's next**, in order, per `docs/Cora-Red-Team.md` §5. Everything on the v0.3 build list
-through graph-lite now exists; what remains needs either a model key or a phylogeny. With a
-key: run real cards, run `cora graph build --model` so findings come from a model extractor
-instead of the lexicon, and label the eval pairs. Then a species tree (TimeTree) to replace
-the taxonomic-class lineage proxy with phylogenetic weighting and a proper residual
-longevity. The standing rule: **no new spec until the previous phase has been used.**
+through graph-lite now exists, plus topics; what remains needs either a model key or use.
+With a key: run real cards, run `cora graph build --model` so findings come from a model
+extractor instead of the lexicon, and label the eval pairs. Then: use the new topics enough
+to promote their lexicons out of beta, a species tree (TimeTree) to replace the taxonomic-rank
+lineage proxy with phylogenetic weighting, and cross-topic convergence — a mechanism that
+recurs in *both* hibernators and anoxia-tolerant animals is a signal Cora does not yet
+compute (`docs/Cora-Topics.md` explains why not). The standing rule: **no new spec until the
+previous phase has been used.**
 
 ## Quickstart
 
@@ -61,8 +100,9 @@ Every command:
 ```bash
 cora setup --refresh             # re-fetch everything; --skip anage graph ... to skip steps; --species to limit
 cora init                        # creates data/cora.db, prints the drafter/judge config
-cora ingest                      # PubMed abstracts for all eight panel species (~650)
-cora ingest --species naked_mole_rat ocean_quahog rockfish   # or a subset
+cora ingest                      # PubMed abstracts for every (topic, species) pair of the enabled topics
+cora ingest --topic regeneration # one topic only
+cora ingest --species naked_mole_rat ocean_quahog rockfish   # or a subset of species
 cora anage                       # download AnAge (HAGR) lifespan records and print the panel table
 cora species                     # the panel: docs, AnAge max longevity + quality/sample/origin, body mass, naive LQ
 cora canary                      # prove the gate catches known-bad citations on the real corpus
@@ -72,6 +112,7 @@ cora graph build                 # gate-verified findings from every abstract (l
 cora graph converge              # mechanisms ranked by independent lineages, with a permutation p-value
 cora graph converge --min-tier association --min-lineages 3
 cora graph show dna_repair       # every finding for one mechanism, per species, with its verbatim quote
+cora graph converge --topic hibernation      # any command that reads the corpus takes --topic
 cora ask "DNA repair and extreme lifespan"          # needs model credentials (see below)
 cora ask "DNA repair and extreme lifespan" --mock   # no credentials: deterministic drafter + judge
 cora ask "..." --no-judge        # mechanical pattern check only (no judge call)
@@ -108,7 +149,9 @@ is not science.
 
 **Data.** Abstracts and raw XML snapshots live in `data/` and are git-ignored, because
 PubMed abstracts carry no per-record reuse license. `data/manifest.json` (PMIDs, the exact
-query, and the download date per species) is committed so the corpus is reproducible.
+query, and the download date per topic/species pair) is committed so the corpus is
+reproducible; a manifest written before topics existed is still read for the `aging` topic,
+so an existing install re-downloads nothing.
 Species are queried by binomial or genus name only; common names pull the wrong organisms
 ("quahog" finds *Mercenaria*, "rockfish" finds striped bass). Generated eval files that
 contain abstract text are git-ignored too. The AnAge table (CC BY 3.0, from

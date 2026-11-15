@@ -116,11 +116,13 @@ def genus_rows(conn, genus: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def panel_traits(conn) -> dict[str, dict | None]:
-    """AnAge row per configured species. A genus-level panel entry (e.g. Sebastes) takes the
+def panel_traits(conn, species_keys: list[str] | None = None) -> dict[str, dict | None]:
+    """AnAge row per species in the panel. A genus-level entry (e.g. Sebastes) takes the
     longest-lived species in the genus and records how many candidates there were."""
+    keys = species_keys if species_keys is not None else list(config.SPECIES)
     out: dict[str, dict | None] = {}
-    for key, sp in config.SPECIES.items():
+    for key in keys:
+        sp = config.SPECIES[key]
         if " " in sp.binomial:
             row = lookup_binomial(conn, sp.binomial)
             if row:
@@ -183,19 +185,24 @@ def longevity_quotient(conn, trait: dict | None) -> dict | None:
     }
 
 
-def panel_summary(conn) -> list[dict]:
-    """One row per configured species: docs in the corpus, AnAge attributes, naive LQ."""
-    counts = db.count_docs_by_species(conn)
-    traits = panel_traits(conn)
+def panel_summary(conn, species_keys: list[str] | None = None, topic_keys: list[str] | None = None) -> list[dict]:
+    """One row per panel species: docs in the corpus, AnAge attributes, naive LQ."""
+    from . import topics
+
+    tks = topics.resolve(topic_keys, conn)
+    keys = species_keys if species_keys is not None else topics.species_for(tks, conn)
+    counts = db.count_docs_by_species(conn, tks)
+    traits = panel_traits(conn, keys)
     out = []
-    for key, sp in config.SPECIES.items():
+    for key in keys:
+        sp = config.SPECIES[key]
         t = traits.get(key)
         out.append(
             {
                 "key": key,
                 "name": sp.name,
                 "binomial": sp.binomial,
-                "default": key in config.DEFAULT_SPECIES,
+                "topics": topics.topics_for_species(key, tks, conn),
                 "docs": counts.get(key, 0),
                 "anage": None if not t else {
                     "binomial": t["binomial"], "match": t.get("match"), "hagrid": t["hagrid"], "class": t["class_"],
@@ -211,16 +218,17 @@ def panel_summary(conn) -> list[dict]:
 
 
 def render_summary(rows: list[dict]) -> str:
-    lines = [f"{'species':<18}{'docs':>5}  {'AnAge max (yrs)':<16}{'quality':<13}{'n':<8}{'origin':<10}{'mass (g)':>11}  {'LQ':>5}  match"]
+    width = max([18] + [len(r["key"]) + 2 for r in rows])
+    lines = [f"{'species':<{width}}{'docs':>5}  {'AnAge max (yrs)':<16}{'quality':<13}{'n':<8}{'origin':<10}{'mass (g)':>11}  {'LQ':>5}  match"]
     for r in rows:
         a = r["anage"]
         if a is None:
-            lines.append(f"{r['key']:<18}{r['docs']:>5}  {'- no AnAge record -':<16}")
+            lines.append(f"{r['key']:<{width}}{r['docs']:>5}  {'- no AnAge record -':<16}")
             continue
         lq = r["lq"]["lq"] if r["lq"] else None
         mass = a["body_mass_g"]
         lines.append(
-            f"{r['key']:<18}{r['docs']:>5}  {a['max_longevity_yrs'] or '?':<16}{(a['data_quality'] or '?'):<13}{(a['sample_size'] or '?'):<8}{(a['specimen_origin'] or '?'):<10}"
+            f"{r['key']:<{width}}{r['docs']:>5}  {a['max_longevity_yrs'] or '?':<16}{(a['data_quality'] or '?'):<13}{(a['sample_size'] or '?'):<8}{(a['specimen_origin'] or '?'):<10}"
             f"{(f'{mass:,.0f}' if mass else '?'):>11}  {(f'{lq:.2f}' if lq is not None else '  -'):>5}  {a['match']}"
         )
     lines.append(f"LQ = {LQ_NOTE}")

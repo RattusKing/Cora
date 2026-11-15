@@ -44,7 +44,7 @@
 <body>
 <header>
   <h1>Cora</h1>
-  <span class="sub">citation-gated hypothesis cards · comparative biology of aging</span>
+  <span class="sub">citation-gated hypothesis cards · comparative biology for human medicine</span>
 </header>
 <main>
   <form id="ask" class="row">
@@ -53,6 +53,11 @@
     <label style="font-size:13px;color:var(--muted)"><input type="checkbox" id="mock"> mock drafter (no API key)</label>
     <label style="font-size:13px;color:var(--muted)"><input type="checkbox" id="judge" checked> judge the pattern</label>
   </form>
+  <div class="panel" id="topicPanel">
+    <h2>Topics <span style="float:right;font-weight:normal;text-transform:none"><button id="topicSave" onclick="saveTopics()">Save topics</button></span></h2>
+    <div id="topics"></div>
+    <div class="meta" id="topicNote"></div>
+  </div>
   <div class="species row" id="species"></div>
   <div class="err" id="err"></div>
   <div class="metrics" id="metrics"></div>
@@ -73,13 +78,47 @@
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-let SPECIES = [];
+let SPECIES = [], TOPICS = [], ENABLED = [];
 
 async function api(path, opts) {
   const r = await fetch(path, Object.assign({headers:{'content-type':'application/json'}}, opts||{}));
   const j = await r.json().catch(()=>({}));
   if (!r.ok) throw new Error(j.detail || r.statusText);
   return j;
+}
+
+async function loadTopics() {
+  const t = await api('/api/topics');
+  TOPICS = t.topics; ENABLED = t.enabled;
+  $('#topics').innerHTML = TOPICS.map(x => {
+    const bits = [`${x.species.length} species`, `${x.docs} abstracts`];
+    if (x.ingested_pairs < x.n_pairs) bits.push(`${x.n_pairs - x.ingested_pairs} not ingested`);
+    if (x.status !== 'ready') bits.push('beta lexicon');
+    if (!x.builtin) bits.push('custom');
+    return `<label style="display:block;margin:4px 0" title="${esc(x.question)}">
+      <input type="checkbox" name="tp" value="${esc(x.key)}" ${x.enabled ? 'checked' : ''}>
+      <b>${esc(x.name)}</b> <span class="meta">(${bits.join(' · ')})</span><br>
+      <span class="meta" style="margin-left:22px">${esc(x.question)}</span></label>`;
+  }).join('');
+  $('#topicNote').textContent = 'Cards, convergence and the corpus are scoped to the topics you enable. `cora topics --add` adds your own.';
+}
+
+function selectedTopics() { return [...document.querySelectorAll('input[name=tp]:checked')].map(i => i.value); }
+
+async function saveTopics() {
+  const picked = selectedTopics();
+  if (!picked.length) { $('#topicNote').textContent = 'Pick at least one topic.'; return; }
+  $('#topicSave').disabled = true;
+  try {
+    const r = await api('/api/topics', {method:'POST', body: JSON.stringify({topics: picked})});
+    ENABLED = r.enabled;
+    const msg = r.not_ingested.length
+      ? `enabled: ${r.enabled.join(', ')} — ${r.not_ingested.length} topic/species pairs are not ingested yet; run \`cora setup\` to fetch them.`
+      : `enabled: ${r.enabled.join(', ')}`;
+    await loadTopics(); await loadSpecies(); await loadConvergence(); await loadLedger(); await loadMetrics();
+    $('#topicNote').textContent = msg;  // after loadTopics, which resets this line
+  } catch (e) { $('#topicNote').textContent = 'could not save topics: ' + e.message; }
+  $('#topicSave').disabled = false;
 }
 
 async function loadSpecies() {
@@ -98,7 +137,7 @@ function selectedSpecies() { return [...document.querySelectorAll('input[name=sp
 async function loadMetrics() {
   const m = await api('/api/metrics');
   $('#metrics').innerHTML =
-    `<span>corpus <b>${m.corpus.total_docs}</b> abstracts</span>` +
+    `<span>corpus <b>${m.corpus.total_docs}</b> abstracts${m.corpus.total_docs !== m.corpus.total_docs_all_topics ? ` in ${esc(m.corpus.topics.join(', '))} (of ${m.corpus.total_docs_all_topics})` : ''}</span>` +
     `<span>cards <b>${m.cards.total}</b> (grounded <b>${m.cards.grounded}</b>)</span>` +
     `<span>gate fabrication rate <b>${(m.gate.fabrication_rate*100).toFixed(0)}%</b> over ${m.gate.items} quotes</span>` +
     `<span>pattern checks passed <b>${m.pattern_check.passed}</b>/${m.pattern_check.checked}</span>` +
@@ -141,7 +180,7 @@ function renderCard(row) {
   const dup = row.duplicate_of ? ` · duplicate of ${esc(row.duplicate_of)}` : '';
   const pc = c.pattern_check;
   return `<div class="card" id="card-${c.id}">
-    <div class="state">${c.id}${state}${dup} ${row.new_evidence ? `<span class="band new">new +${row.new_evidence}</span>` : ''}</div>
+    <div class="state">${c.id}${state}${dup}${(c.topics||[]).length ? ' · ' + esc((c.topics||[]).join(', ')) : ''} ${row.new_evidence ? `<span class="band new">new +${row.new_evidence}</span>` : ''}</div>
     <div class="pattern">${esc(c.draft.pattern)}</div>
     ${q ? `<div class="quote">“${esc(q.quote)}”<br><span class="meta">— <a target="_blank" href="https://pubmed.ncbi.nlm.nih.gov/${esc(q.pmid)}/">PMID ${esc(q.pmid)}</a> ${esc(title)}${(docs[q.pmid]?.flags||[]).length ? ` <span class="flag">!! ${esc(docs[q.pmid].flags.join(', '))}</span>` : ''}</span></div>`
         : `<div class="quote dropped">no quote survived the gate</div>`}
@@ -214,13 +253,13 @@ $('#ask').addEventListener('submit', async ev => {
   $('#err').textContent = '';
   $('#go').disabled = true;
   try {
-    await api('/api/ask', {method:'POST', body: JSON.stringify({query: $('#q').value, species: selectedSpecies(), mock: $('#mock').checked, judge: $('#judge').checked})});
+    await api('/api/ask', {method:'POST', body: JSON.stringify({query: $('#q').value, species: selectedSpecies(), topics: selectedTopics(), mock: $('#mock').checked, judge: $('#judge').checked})});
     await loadLedger(); await loadMetrics();
   } catch (e) { $('#err').textContent = e.message; }
   $('#go').disabled = false;
 });
 
-loadSpecies(); loadMetrics(); loadRecheck(); loadConvergence(); loadLedger();
+loadTopics(); loadSpecies(); loadMetrics(); loadRecheck(); loadConvergence(); loadLedger();
 </script>
 </body>
 </html>
