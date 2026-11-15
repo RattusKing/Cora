@@ -496,11 +496,20 @@ def _add_topic(conn, args):
             zero.append(sk)
     if zero:
         print(f"\n{len(zero)} species returned nothing: {', '.join(zero)} - usually a misspelled binomial or terms that are too narrow.")
-        if sys.stdin.isatty() and input("store this topic anyway? [y/N] ").strip().lower() not in ("y", "yes"):
-            sys.exit("not stored")
+        if args.force:
+            print("--force given: storing anyway.")
+        elif sys.stdin.isatty():
+            if input("store this topic anyway? [y/N] ").strip().lower() not in ("y", "yes"):
+                sys.exit("not stored")
+        else:
+            # No terminal to ask at: storing a topic that finds nothing would look like it
+            # worked and then return no cards. Refuse, and say how to override.
+            sys.exit("not stored - fix the species or the terms, or re-run with --force")
     db.save_custom_topic(conn, spec.key, tp.to_json(spec))
     enabled = db.enabled_topics(conn) or [topics.DEFAULT_TOPIC]
-    db.set_enabled_topics(conn, enabled + [spec.key] if spec.key not in enabled else enabled)
+    if spec.key not in enabled:
+        enabled = enabled + [spec.key]
+    db.set_enabled_topics(conn, enabled)
     print(f"\nstored custom topic {spec.key!r} and enabled it. Run `cora setup` to fetch its abstracts.")
     print(f"share it: cora topics --export {spec.key} > {spec.key}.json")
 
@@ -629,6 +638,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("-i", "--interactive", action="store_true", help="show the picker and ask")
     s.add_argument("--add", action="store_true", help="add a custom topic (interactive, or with --file)")
     s.add_argument("--file", help="with --add: a topic JSON file (as written by --export)")
+    s.add_argument("--force", action="store_true", help="with --add: store the topic even if a species returns no abstracts")
     s.add_argument("--export", help="print one topic as JSON, to share or edit")
     s.add_argument("--remove", nargs="*", help="delete custom topics by key")
     s.set_defaults(fn=cmd_topics)

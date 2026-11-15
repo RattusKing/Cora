@@ -214,3 +214,32 @@ def test_cards_from_before_topics_are_labelled_aging(tmp_path):
     assert [r["card"].id for r in ledger.list_cards(c2, topic_keys=["aging"])] == ["old1"]
     assert ledger.list_cards(c2, topic_keys=["hibernation"]) == []  # no longer shown everywhere
     c2.close()
+
+
+def test_a_custom_topic_that_finds_nothing_is_not_stored_silently(tmp_path, monkeypatch, capsys):
+    """Without a terminal to ask at, a topic whose species return no abstracts must not be
+    stored: it would look like it worked and then return no cards."""
+    import pytest as _pytest
+
+    from cora import cli, ingest
+
+    spec = {
+        "key": "empty_topic", "name": "Empty", "question": "q?",
+        "terms": "(zzzznothing[Title/Abstract])",
+        "species": ["hydra"], "mechanisms": ["stem_cells"],
+    }
+    f = tmp_path / "t.json"
+    f.write_text(json.dumps(spec), encoding="utf-8")
+    monkeypatch.setattr(ingest, "esearch", lambda term, retmax=1000: [])
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False, raising=False)
+    conn = db.connect(":memory:")
+
+    args = cli.build_parser().parse_args(["topics", "--add", "--file", str(f)])
+    with _pytest.raises(SystemExit) as e:
+        cli._add_topic(conn, args)
+    assert "--force" in str(e.value)
+    assert "empty_topic" not in topics.all_topics(conn)
+
+    forced = cli.build_parser().parse_args(["topics", "--add", "--file", str(f), "--force"])
+    cli._add_topic(conn, forced)
+    assert "empty_topic" in topics.all_topics(conn)
