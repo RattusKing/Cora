@@ -37,11 +37,17 @@ def cmd_setup(args):
         sys.exit(str(e))
     keys = args.species or topics.species_for(tks, conn)
     _validate_species(keys)
+    previously = db.enabled_topics(conn)
     res = setup.run(
         conn, args.species and keys or None, refresh=args.refresh, skip=set(args.skip or ()),
         log=print if args.verbose else _quiet,
         db_label=str(getattr(args, "db", None) or config.DB_PATH), topic_keys=tks,
     )
+    if previously and set(previously) != set(tks):
+        # --topic is a transient scope everywhere else; here it is remembered, so say so
+        # rather than let the next `cora ask` quietly stop seeing the old corpus.
+        print(f"note: enabled topics changed from [{', '.join(previously)}] to [{', '.join(tks)}]."
+              f" `cora topics --set {' '.join(previously)}` puts it back; the abstracts are all still stored.")
     print(setup.render(res, conn))
     conn.close()
     if not res.ok:
@@ -178,7 +184,7 @@ def cmd_ask(args):
 
 def cmd_ledger(args):
     conn = _conn(args)
-    rows = ledger.list_cards(conn, include_archived=args.all, limit=args.limit, topic_keys=args.topic)
+    rows = ledger.list_cards(conn, include_archived=args.all, limit=args.limit, topic_keys=_topics_or_exit(conn, args.topic))
     if not rows:
         print("ledger is empty - try: cora ask \"...\"")
     for r in rows:
@@ -360,7 +366,7 @@ def cmd_graph(args):
         rows = graph.converge(conn, min_tier=args.min_tier, perms=args.perms, extractor=args.extractor, topic_keys=_topics_or_exit(conn, args.topic))
         print(graph.render_convergence(rows, min_lineages=args.min_lineages))
     elif args.graph_cmd == "show":
-        rows = graph.mechanism_detail(conn, args.mechanism, extractor=args.extractor, topic_keys=args.topic)
+        rows = graph.mechanism_detail(conn, args.mechanism, extractor=args.extractor, topic_keys=_topics_or_exit(conn, args.topic))
         if not rows:
             sys.exit(f"no findings for mechanism {args.mechanism!r}; known: {', '.join(graph.MECHANISMS)}")
         spec = graph.MECHANISMS.get(args.mechanism, {})
@@ -388,14 +394,20 @@ def cmd_topics(args):
         conn.close()
         return
     if args.remove:
+        # Check every key first: deleting some and then exiting on a typo would leave the
+        # enabled list naming topics that no longer exist.
         for key in args.remove:
             if key in topics.BUILTIN:
                 sys.exit(f"{key!r} is built in and cannot be deleted; drop it from your selection instead (`cora topics --set ...`)")
-            if not db.delete_custom_topic(conn, key):
-                sys.exit(f"no custom topic {key!r}")
-            print(f"deleted custom topic {key}")
+            if key not in registry:
+                sys.exit(f"no custom topic {key!r}; custom topics: {', '.join(k for k in registry if not registry[k].builtin) or 'none'}")
+        for key in args.remove:
+            db.delete_custom_topic(conn, key)
+            n = db.forget_topic(conn, key)
+            print(f"deleted custom topic {key} ({n} paper links released; the abstracts themselves are kept)")
         remaining = [k for k in db.enabled_topics(conn) if k not in args.remove]
         db.set_enabled_topics(conn, remaining or [topics.DEFAULT_TOPIC])
+        print("enabled topics:", ", ".join(db.enabled_topics(conn)))
         conn.close()
         return
 
@@ -505,13 +517,25 @@ def _add_topic(conn, args):
             # No terminal to ask at: storing a topic that finds nothing would look like it
             # worked and then return no cards. Refuse, and say how to override.
             sys.exit("not stored - fix the species or the terms, or re-run with --force")
+    # Re-adding or editing a topic whose query changed must re-fetch: the abstracts already
+    # stored were collected under the OLD terms, and `cora setup` skips any pair it has
+    # already ingested, so nothing else would ever notice.
+    previous = registry_of(conn).get(spec.key)
+    changed = previous is not None and (previous.terms != spec.terms or set(previous.species) != set(spec.species))
     db.save_custom_topic(conn, spec.key, tp.to_json(spec))
+    if changed:
+        n = db.forget_ingest_state(conn, spec.key)
+        print(f"\nits query changed, so {n} topic/species pair(s) are marked un-ingested and will be fetched again.")
     enabled = db.enabled_topics(conn) or [topics.DEFAULT_TOPIC]
     if spec.key not in enabled:
         enabled = enabled + [spec.key]
     db.set_enabled_topics(conn, enabled)
     print(f"\nstored custom topic {spec.key!r} and enabled it. Run `cora setup` to fetch its abstracts.")
     print(f"share it: cora topics --export {spec.key} > {spec.key}.json")
+
+
+def registry_of(conn):
+    return topics.all_topics(conn)
 
 
 def _graph_mechanisms() -> list[str]:

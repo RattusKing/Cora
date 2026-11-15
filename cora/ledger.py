@@ -45,14 +45,15 @@ def list_cards(conn, include_archived: bool = False, limit: int = 50, topic_keys
     """Ranked: verified species, then groundedness, then recency. Archived entries, cards
     whose pattern failed its check, and duplicates are demoted, never removed. Each row
     carries `new_evidence`: unseen touches from the re-check."""
+    # The limit is applied AFTER the topic and archive filters, not in SQL: ranking first
+    # and filtering second would hide a topic's cards behind other topics' higher-ranked
+    # ones, so `cora ledger --topic X` would show only those in the global top N.
     rows = conn.execute(
         """SELECT * FROM ledger
            ORDER BY (state = 'archived') ASC,
                     (state IN ('overclaim', 'unsupported', 'ungrounded')) ASC,
                     (duplicate_of IS NOT NULL) ASC,
-                    n_species DESC, groundedness DESC, n_verified DESC, created_at DESC
-           LIMIT ?""",
-        (limit,),
+                    n_species DESC, groundedness DESC, n_verified DESC, created_at DESC"""
     ).fetchall()
     unseen = db.unseen_update_counts(conn)
     wanted = set(topic_keys) if topic_keys else None
@@ -71,6 +72,8 @@ def list_cards(conn, include_archived: bool = False, limit: int = 50, topic_keys
                 "expanded": r["expanded"], "exported": r["exported"], "new_evidence": unseen.get(r["id"], 0),
             }
         )
+        if len(out) >= limit:
+            break
     return out
 
 

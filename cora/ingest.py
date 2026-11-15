@@ -296,7 +296,7 @@ def update_species(
         db.upsert_doc(conn, d, species.key, topic_key=topic.key)
     conn.commit()
     if new:
-        db.record_ingest(conn, topic.key, species.key, term, len(current), len(docs))
+        db.record_ingest(conn, topic.key, species.key, term, len(current), len(docs), accumulate=True)
     log(f"[{tag}] {len(current)} PMIDs now; {len(new)} new, {len(gone)} no longer returned; stored {len(docs)}")
     return {
         "topic": topic.key, "species": species.key, "query": term, "pmids": current, "new": new,

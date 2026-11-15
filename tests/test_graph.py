@@ -323,3 +323,18 @@ def test_a_topic_build_writes_only_its_own_vocabulary(conn):
     hypoxia_only = graph.build(conn, graph.LexiconExtractor(), log=lambda *a, **k: None, topic_keys=["hypoxia"])
     assert "telomere" not in hypoxia_only["by_mechanism"]
     assert set(hypoxia_only["by_mechanism"]) <= set(topics.BUILTIN["hypoxia"].mechanisms)
+
+
+def test_mechanism_detail_stays_inside_the_panel(conn):
+    """A paper shared with another topic carries that topic's species links too."""
+    shared = {"pmid": "9300001", "title": "Shared", "retrieved_at": "x", "pub_types": ["Journal Article"],
+              "abstract": "Mitochondrial function is associated with longevity in these subterranean rodents."}
+    db.upsert_doc(conn, shared, "naked_mole_rat", topic_key="aging")
+    db.upsert_doc(conn, shared, "blind_mole_rat", topic_key="cancer_resistance")
+    conn.commit()
+    graph.build(conn, graph.LexiconExtractor(), log=lambda *a, **k: None, topic_keys=["aging", "cancer_resistance"])
+
+    aging = {r["species_key"] for r in graph.mechanism_detail(conn, "mitochondria", topic_keys=["aging"])}
+    assert "naked_mole_rat" in aging and "blind_mole_rat" not in aging
+    unscoped = {r["species_key"] for r in graph.mechanism_detail(conn, "mitochondria")}
+    assert "blind_mole_rat" in unscoped  # without a topic, nothing is hidden

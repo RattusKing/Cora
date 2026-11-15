@@ -113,6 +113,11 @@ def run(
     topic_keys = topics.resolve(topic_keys, conn)
     registry = topics.all_topics(conn)
     pairs = topics.pairs(topic_keys, species_keys, conn)
+    if not pairs:
+        # e.g. `cora recheck --species elephant` while only aging is enabled. Silence here
+        # reads as "nothing new", which is the opposite of "I looked at nothing".
+        log(f"[recheck] no topic/species pairs: {', '.join(species_keys or ['(all)'])}"
+            f" is not in the panel of {', '.join(topic_keys)} - nothing was checked")
     manifest = ingest.load_manifest() or ingest._empty_manifest()
     manifest.setdefault("pairs", {})
     per_pair: dict[str, dict] = {}

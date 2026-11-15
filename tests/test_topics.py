@@ -304,3 +304,54 @@ def test_an_empty_mechanism_list_means_none_not_all():
     assert {f.mechanism for f in ex.extract(doc, ["telomere"])} == {"telomere"}
     assert graph.mechanisms_in_text("telomere length", []) == []
     assert graph.mechanisms_in_text("telomere length", None) == ["telomere"]
+
+
+def test_removing_a_custom_topic_releases_links_but_keeps_abstracts(conn):
+    """A card citing one of those abstracts must keep working: the gate checks the quote
+    against the stored text."""
+    t = topics.custom_topic(key="mine", name="Mine", question="q?", terms="x[Title/Abstract]",
+                            species=["hydra"], mechanisms=["stem_cells"])
+    db.save_custom_topic(conn, t.key, topics.to_json(t))
+    db.upsert_doc(conn, {"pmid": "7777", "title": "t", "abstract": "a" * 60, "retrieved_at": "x"},
+                  "hydra", topic_key="mine")
+    db.record_ingest(conn, "mine", "hydra", "q", 1, 1)
+    conn.commit()
+    assert db.count_docs_by_topic(conn)["mine"] == 1 and ("mine", "hydra") in db.ingested_pairs(conn)
+
+    released = db.forget_topic(conn, "mine")
+    assert released == 1
+    assert "mine" not in db.count_docs_by_topic(conn)
+    assert ("mine", "hydra") not in db.ingested_pairs(conn)
+    assert db.docs_by_pmid(conn, ["7777"])["7777"]["abstract"]  # the abstract is still there
+
+
+def test_an_edited_topic_is_marked_for_re_ingest(conn):
+    t = topics.custom_topic(key="mine", name="Mine", question="q?", terms="narrow[Title/Abstract]",
+                            species=["hydra"], mechanisms=["stem_cells"])
+    db.save_custom_topic(conn, t.key, topics.to_json(t))
+    db.record_ingest(conn, "mine", "hydra", "narrow", 40, 40)
+    assert ("mine", "hydra") in db.ingested_pairs(conn)
+    assert db.forget_ingest_state(conn, "mine") == 1
+    assert ("mine", "hydra") not in db.ingested_pairs(conn)  # `cora setup` fetches it again
+
+
+def test_scoped_species_counts_stay_inside_the_panel(conn):
+    """A paper two topics both found carries both their species links."""
+    shared = {"pmid": "7778", "title": "t", "abstract": "a" * 60, "retrieved_at": "x"}
+    db.upsert_doc(conn, shared, "naked_mole_rat", topic_key="aging")
+    db.upsert_doc(conn, shared, "elephant", topic_key="cancer_resistance")
+    conn.commit()
+    aging = db.count_docs_by_species(conn, ["aging"])
+    assert "elephant" not in aging and aging["naked_mole_rat"] >= 1
+    cancer = db.count_docs_by_species(conn, ["cancer_resistance"])
+    assert cancer == {"naked_mole_rat": 1, "elephant": 1}  # both ARE in that panel
+
+
+def test_a_full_ingest_replaces_the_stored_count_and_a_recheck_adds(conn):
+    db.record_ingest(conn, "aging", "hydra", "q", 100, 100)
+    db.record_ingest(conn, "aging", "hydra", "q", 100, 100)  # e.g. `cora setup --refresh`
+    row = conn.execute("SELECT n_pmids, stored FROM ingest_state WHERE species_key='hydra'").fetchone()
+    assert (row["n_pmids"], row["stored"]) == (100, 100)
+    db.record_ingest(conn, "aging", "hydra", "q", 103, 3, accumulate=True)  # a re-check
+    row = conn.execute("SELECT n_pmids, stored FROM ingest_state WHERE species_key='hydra'").fetchone()
+    assert (row["n_pmids"], row["stored"]) == (103, 103)

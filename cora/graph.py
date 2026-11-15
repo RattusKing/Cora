@@ -524,14 +524,24 @@ def converge(
 
 
 def mechanism_detail(conn, mechanism: str, extractor: str | None = None, topic_keys: list[str] | None = None) -> list[dict]:
+    """Every finding for one mechanism. Scoped to topics, it is also limited to their panel
+    species, the way `converge` is: a paper shared with another topic carries that topic's
+    species links too, and listing a blind mole-rat under the aging question is wrong."""
     q = "SELECT f.*, d.title, d.pub_year FROM findings f LEFT JOIN docs d ON d.pmid = f.pmid WHERE f.mechanism = ?"
     args: list = [mechanism]
     if extractor:
         q += " AND f.extractor = ?"
         args.append(extractor)
     if topic_keys:
+        from . import topics as topics_mod
+
         q += f" AND f.pmid IN (SELECT pmid FROM doc_topic WHERE topic_key IN ({','.join('?' * len(topic_keys))}))"
         args += list(topic_keys)
+        panel = topics_mod.species_for(list(topic_keys), conn)
+        if not panel:
+            return []
+        q += f" AND f.species_key IN ({','.join('?' * len(panel))})"
+        args += panel
     q += " ORDER BY f.species_key, f.tier DESC, d.pub_year DESC"
     return [dict(r) for r in conn.execute(q, args).fetchall()]
 

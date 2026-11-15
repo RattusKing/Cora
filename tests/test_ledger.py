@@ -45,3 +45,22 @@ def test_days_opened_and_checkin(conn):
     metrics.record_checkin(conn, True, "used a card in a draft")
     m = metrics.compute(conn)["user"]
     assert m["days_opened"] == 1 and m["checkins"][0]["useful"] is True
+
+
+def test_the_topic_filter_is_applied_before_the_limit(conn):
+    """Ranking first and filtering second would hide a topic's cards behind other topics'."""
+    from cora import db as _db
+    from cora.llm import MockLLM
+
+    # six aging cards, then one hibernation card ranked below them
+    for i in range(6):
+        generate.ask(conn, f"longevity lifespan {i}", llm=MockLLM(max_items=2))
+    _db.upsert_doc(conn, {"pmid": "6600001", "title": "Bear muscle",
+                          "abstract": "Muscle mass is preserved through hibernation in bears, and torpor is associated with metabolic depression.",
+                          "retrieved_at": "x", "pub_types": ["Journal Article"]}, "bear", topic_key="hibernation")
+    conn.commit()
+    hib = generate.ask(conn, "muscle preserved through torpor", llm=MockLLM(), topic_keys=["hibernation"])
+
+    assert len(ledger.list_cards(conn, limit=3)) == 3  # the limit still limits
+    rows = ledger.list_cards(conn, limit=3, topic_keys=["hibernation"])
+    assert [r["card"].id for r in rows] == [hib.id], "the hibernation card fell outside the global top 3"

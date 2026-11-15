@@ -337,13 +337,23 @@ def count_docs(conn: sqlite3.Connection, topic_keys: list[str] | None = None) ->
 
 
 def count_docs_by_species(conn: sqlite3.Connection, topic_keys: list[str] | None = None) -> dict[str, int]:
+    """Papers per species. Scoped to topics, the species are also limited to their panels:
+    a paper found by two topics carries both their species links, and counting an elephant
+    under `aging` because a cancer-resistance query also found that paper is just wrong."""
     if topic_keys:
+        from . import topics as topics_mod
+
+        panel = topics_mod.species_for(list(topic_keys), conn)
+        if not panel:
+            return {}
         marks = ",".join("?" * len(topic_keys))
+        sp_marks = ",".join("?" * len(panel))
         rows = conn.execute(
             f"""SELECT ds.species_key, COUNT(DISTINCT ds.pmid) AS n FROM doc_species ds
                 WHERE ds.pmid IN (SELECT pmid FROM doc_topic WHERE topic_key IN ({marks}))
+                  AND ds.species_key IN ({sp_marks})
                 GROUP BY ds.species_key""",
-            list(topic_keys),
+            [*topic_keys, *panel],
         ).fetchall()
     else:
         rows = conn.execute("SELECT species_key, COUNT(*) AS n FROM doc_species GROUP BY species_key").fetchall()
@@ -408,16 +418,54 @@ def delete_custom_topic(conn: sqlite3.Connection, key: str) -> bool:
     return cur.rowcount > 0
 
 
-def record_ingest(conn: sqlite3.Connection, topic_key: str, species_key: str, query: str, n_pmids: int, stored: int) -> None:
+def record_ingest(
+    conn: sqlite3.Connection,
+    topic_key: str,
+    species_key: str,
+    query: str,
+    n_pmids: int,
+    stored: int,
+    accumulate: bool = False,
+) -> None:
+    """Record that a (topic, species) pair was fetched.
+
+    `accumulate` is for the incremental re-check, which stores only what is new. A full
+    ingest replaces the count instead: adding to it made `--refresh` double every number.
+    """
+    stored_expr = "ingest_state.stored + excluded.stored" if accumulate else "excluded.stored"
     conn.execute(
-        """INSERT INTO ingest_state (topic_key, species_key, query, n_pmids, stored, first_date, updated)
+        f"""INSERT INTO ingest_state (topic_key, species_key, query, n_pmids, stored, first_date, updated)
            VALUES (?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(topic_key, species_key) DO UPDATE SET
              query = excluded.query, n_pmids = excluded.n_pmids,
-             stored = ingest_state.stored + excluded.stored, updated = excluded.updated""",
+             stored = {stored_expr}, updated = excluded.updated""",
         (topic_key, species_key, query, n_pmids, stored, today(), today()),
     )
     conn.commit()
+
+
+def forget_topic(conn: sqlite3.Connection, topic_key: str) -> int:
+    """Unlink a topic's papers and forget it was ingested. The abstracts themselves stay.
+
+    Deleting them would break the provenance of any card that cites one - the citation gate
+    checks a quote against the stored abstract - so a removed topic releases its links and
+    leaves the text alone.
+    """
+    n = conn.execute("DELETE FROM doc_topic WHERE topic_key = ?", (topic_key,)).rowcount
+    conn.execute("DELETE FROM ingest_state WHERE topic_key = ?", (topic_key,))
+    conn.commit()
+    return n
+
+
+def forget_ingest_state(conn: sqlite3.Connection, topic_key: str) -> int:
+    """Forget that a topic's pairs were fetched, so the next `cora setup` fetches them again.
+
+    Used when a topic's query changes: the stored abstracts were collected under the old
+    terms, and nothing else would ever notice.
+    """
+    n = conn.execute("DELETE FROM ingest_state WHERE topic_key = ?", (topic_key,)).rowcount
+    conn.commit()
+    return n
 
 
 def ingested_pairs(conn: sqlite3.Connection) -> set[tuple[str, str]]:
