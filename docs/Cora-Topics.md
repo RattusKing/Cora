@@ -73,9 +73,15 @@ white adipose tissue … *but* activation was not seen in liver" was being store
 *negative* result for adipose tissue. The stored quote is still the whole sentence - a
 reader needs the context, and the citation gate checks the quote verbatim - but tier and
 direction come from the clause holding the mechanism. On the first five-topic corpus this
-cut negatives whose sentence also carries a contrast marker from 45% to 29% of all
-negatives; the remaining 29% are sentences where the negation really is in the mechanism's
-clause.
+cut negatives whose sentence also carries a contrast marker from 45% to 27% of all
+negatives; the rest are sentences where the negation really is in the mechanism's clause.
+
+Read *every* clause that names the mechanism, not the first one: "Longevity is driven by
+enhanced DNA repair, **but** DNA repair capacity did not differ between species" is a null
+result, and taking the first clause filed it as positive support - the costliest direction
+to be wrong in. A negation in any clause naming the mechanism wins. "while" and "though" do
+not split a sentence at all: "measured **while** the animals were torpid, and no difference
+was seen" is one claim, and splitting it hid the null.
 
 **A single-lineage panel says so.** Every cancer-resistance species is a mammal, so no
 mechanism can ever reach two class-level lineages there. Reporting "no mechanism reaches 2
