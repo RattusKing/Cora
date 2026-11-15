@@ -148,10 +148,11 @@ is not science.
 | `NCBI_EMAIL` | unset | passed to E-utilities if set; never defaulted |
 
 **Data.** Abstracts and raw XML snapshots live in `data/` and are git-ignored, because
-PubMed abstracts carry no per-record reuse license. `data/manifest.json` (PMIDs, the exact
-query, and the download date per topic/species pair) is committed so the corpus is
-reproducible; a manifest written before topics existed is still read for the `aging` topic,
-so an existing install re-downloads nothing.
+PubMed abstracts carry no per-record reuse license. `data/manifest.json` records the PMIDs, the exact
+query and the download date per topic/species pair. The committed copy is the `aging`
+corpus; your own `cora setup` runs extend it locally with the topics you enable. A manifest
+written before topics existed is still read for `aging`, so an existing install
+re-downloads nothing.
 Species are queried by binomial or genus name only; common names pull the wrong organisms
 ("quahog" finds *Mercenaria*, "rockfish" finds striped bass). Generated eval files that
 contain abstract text are git-ignored too. The AnAge table (CC BY 3.0, from

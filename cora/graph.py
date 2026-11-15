@@ -305,8 +305,12 @@ def build(
 ) -> dict:
     """(Re)build findings for one extractor. Every quote is gate-checked before it is stored.
 
-    Each abstract is scanned with the mechanism vocabulary of the topics it belongs to, so a
-    topic only ever produces findings in its own vocabulary.
+    Each abstract is scanned with the mechanism vocabulary of **every** topic it belongs to,
+    not just the topics being built. A paper can belong to two topics (the naked mole-rat is
+    in three); rebuilding one of them deletes that paper's rows first, so narrowing the
+    vocabulary to the topic being built would silently drop the other topic's findings for
+    every shared paper. Convergence filters by vocabulary anyway, so the wider scan costs
+    nothing and keeps the invariant: a paper's findings are the union of its topics'.
     """
     from . import topics as topics_mod
 
@@ -333,7 +337,7 @@ def build(
     for doc in docs:
         if doc.get("pub_types") is None:
             unknown_types += 1
-        doc_topics = [t for t in (doc.get("topics") or tks) if t in tks and t in registry]
+        doc_topics = [t for t in (doc.get("topics") or tks) if t in registry]
         vocab = topics_mod.mechanisms_for(doc_topics or tks, conn)
         for f in extractor.extract(doc, vocab):
             if check_item(EvidenceItem(pmid=f.pmid, quote=f.quote), {doc["pmid"]: doc}) is not None:

@@ -210,3 +210,33 @@ def test_render_aligns_long_mechanism_names(conn):
         if line.startswith("lineage ="):
             continue
         assert line[:col].strip() and not line[:col].rstrip().endswith("2")  # name column is wide enough
+
+
+def test_rebuilding_one_topic_keeps_a_shared_papers_other_findings(conn):
+    """The naked mole-rat is in three topics. Rebuilding one must not drop the others'
+    findings for a paper they share - the rebuild deletes that paper's rows first."""
+    shared = {
+        "pmid": "8000001", "title": "NMR telomeres and hypoxia", "retrieved_at": "x",
+        "pub_types": ["Journal Article"],
+        "abstract": (
+            "Telomere length is associated with lifespan in the naked mole-rat. "
+            "Hypoxia tolerance is associated with metabolic depression in this species."
+        ),
+    }
+    db.upsert_doc(conn, shared, "naked_mole_rat", topic_key="aging")
+    db.upsert_doc(conn, shared, "naked_mole_rat", topic_key="hypoxia")
+    conn.commit()
+    assert set(db.docs_by_pmid(conn, ["8000001"])["8000001"]["topics"]) == {"aging", "hypoxia"}
+
+    graph.build(conn, graph.LexiconExtractor(), log=lambda *a, **k: None, topic_keys=["aging"])
+    before = {r["mechanism"] for r in graph._load_findings(conn, None, ["aging"]) if r["pmid"] == "8000001"}
+    assert "telomere" in before  # aging-only mechanism
+
+    graph.build(conn, graph.LexiconExtractor(), log=lambda *a, **k: None, topic_keys=["hypoxia"])
+    after = {r["mechanism"] for r in graph._load_findings(conn, None, ["aging"]) if r["pmid"] == "8000001"}
+    assert "telomere" in after, "a hypoxia-only rebuild dropped the aging finding"
+    assert "hypoxia" in after  # and the hypoxia one is there too
+    # no duplicate rows for the shared paper
+    n = conn.execute("SELECT COUNT(*) AS n FROM findings WHERE pmid = '8000001'").fetchone()["n"]
+    graph.build(conn, graph.LexiconExtractor(), log=lambda *a, **k: None, topic_keys=["aging", "hypoxia"])
+    assert conn.execute("SELECT COUNT(*) AS n FROM findings WHERE pmid = '8000001'").fetchone()["n"] == n
