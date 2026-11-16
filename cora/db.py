@@ -47,9 +47,35 @@ CREATE TABLE IF NOT EXISTS doc_species (
     species_key TEXT NOT NULL,
     PRIMARY KEY (pmid, species_key)
 );
+CREATE TABLE IF NOT EXISTS doc_topic (
+    pmid      TEXT NOT NULL,
+    topic_key TEXT NOT NULL,
+    PRIMARY KEY (pmid, topic_key)
+);
+CREATE INDEX IF NOT EXISTS doc_topic_topic ON doc_topic(topic_key);
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS custom_topics (
+    key        TEXT PRIMARY KEY,
+    spec_json  TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ingest_state (
+    topic_key   TEXT NOT NULL,
+    species_key TEXT NOT NULL,
+    query       TEXT NOT NULL,
+    n_pmids     INTEGER NOT NULL,
+    stored      INTEGER NOT NULL,
+    first_date  TEXT NOT NULL,
+    updated     TEXT NOT NULL,
+    PRIMARY KEY (topic_key, species_key)
+);
 CREATE TABLE IF NOT EXISTS ledger (
     id           TEXT PRIMARY KEY,
     created_at   TEXT NOT NULL,
+    topics       TEXT,
     query        TEXT NOT NULL,
     card_json    TEXT NOT NULL,
     dedupe_key   TEXT NOT NULL,
@@ -157,6 +183,50 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE docs ADD COLUMN flags TEXT")
     if "pub_types" not in cols:
         conn.execute("ALTER TABLE docs ADD COLUMN pub_types TEXT")
+    led = {r[1] for r in conn.execute("PRAGMA table_info(ledger)").fetchall()}
+    if led and "topics" not in led:
+        conn.execute("ALTER TABLE ledger ADD COLUMN topics TEXT")
+    # A database written before topics existed holds exactly the aging corpus: label it,
+    # so its abstracts, cards and findings stay reachable once topics filter everything.
+    if conn.execute("SELECT COUNT(*) AS n FROM docs").fetchone()[0] and not conn.execute(
+        "SELECT COUNT(*) AS n FROM doc_topic"
+    ).fetchone()[0]:
+        conn.execute("INSERT OR IGNORE INTO doc_topic (pmid, topic_key) SELECT pmid, 'aging' FROM docs")
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('enabled_topics', '[\"aging\"]')"
+        )
+        # ... and record those (aging, species) pairs as ingested, so `cora setup` does not
+        # re-download a corpus that is already here.
+        conn.execute(
+            """INSERT OR IGNORE INTO ingest_state (topic_key, species_key, query, n_pmids, stored, first_date, updated)
+               SELECT 'aging', species_key, '(migrated from a pre-topics database)', COUNT(*), COUNT(*), ?, ?
+               FROM doc_species GROUP BY species_key""",
+            (today(), today()),
+        )
+    _migrate_card_topics(conn)
+
+
+def _migrate_card_topics(conn: sqlite3.Connection) -> None:
+    """Label cards written before topics existed as `aging` - the only topic there was.
+
+    Without this they carry no topic and show under every topic's ledger, because an
+    unlabelled card is shown rather than hidden.
+    """
+    try:
+        rows = conn.execute("SELECT id, card_json FROM ledger WHERE topics IS NULL").fetchall()
+    except sqlite3.OperationalError:
+        return
+    for r in rows:
+        try:
+            card = json.loads(r["card_json"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not card.get("topics"):
+            card["topics"] = ["aging"]
+        conn.execute(
+            "UPDATE ledger SET topics = ?, card_json = ? WHERE id = ?",
+            (json.dumps(card["topics"]), json.dumps(card), r["id"]),
+        )
 
 
 def connect(path: str | Path | None = None) -> sqlite3.Connection:
@@ -177,12 +247,21 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
 def _row_to_doc(r) -> dict:
     d = dict(r)
     d["species"] = sorted((d.get("species") or "").split(",")) if d.get("species") else []
+    d["topics"] = sorted((d.get("topics") or "").split(",")) if d.get("topics") else []
     d["flags"] = json.loads(d["flags"]) if d.get("flags") else []
     d["pub_types"] = json.loads(d["pub_types"]) if d.get("pub_types") else None
     return d
 
 
-def upsert_doc(conn: sqlite3.Connection, doc: dict, species_key: str | None) -> None:
+# Species and topics come from correlated subqueries: two GROUP_CONCAT joins would
+# multiply the rows against each other and inflate both lists.
+_DOC_SELECT = """SELECT d.*,
+       (SELECT GROUP_CONCAT(ds.species_key) FROM doc_species ds WHERE ds.pmid = d.pmid) AS species,
+       (SELECT GROUP_CONCAT(dt.topic_key) FROM doc_topic dt WHERE dt.pmid = d.pmid) AS topics
+  FROM docs d"""
+
+
+def upsert_doc(conn: sqlite3.Connection, doc: dict, species_key: str | None, topic_key: str | None = None) -> None:
     conn.execute(
         """INSERT INTO docs (pmid, title, abstract, journal, pub_year, entrez_date, retrieved_at, snapshot_file, flags, pub_types)
            VALUES (:pmid, :title, :abstract, :journal, :pub_year, :entrez_date, :retrieved_at, :snapshot_file, :flags, :pub_types)
@@ -209,6 +288,11 @@ def upsert_doc(conn: sqlite3.Connection, doc: dict, species_key: str | None) -> 
             "INSERT OR IGNORE INTO doc_species (pmid, species_key) VALUES (?, ?)",
             (doc["pmid"], species_key),
         )
+    if topic_key:
+        conn.execute(
+            "INSERT OR IGNORE INTO doc_topic (pmid, topic_key) VALUES (?, ?)",
+            (doc["pmid"], topic_key),
+        )
 
 
 def set_doc_flags(conn: sqlite3.Connection, pmid: str, flags: list[str]) -> None:
@@ -216,48 +300,180 @@ def set_doc_flags(conn: sqlite3.Connection, pmid: str, flags: list[str]) -> None
     conn.commit()
 
 
-def get_docs(conn: sqlite3.Connection, species_keys: list[str] | None = None) -> list[dict]:
+def get_docs(
+    conn: sqlite3.Connection,
+    species_keys: list[str] | None = None,
+    topic_keys: list[str] | None = None,
+) -> list[dict]:
+    """Abstracts, optionally restricted to species and/or topics (an AND of both filters)."""
+    where: list[str] = []
+    args: list = []
     if species_keys:
-        marks = ",".join("?" * len(species_keys))
-        rows = conn.execute(
-            f"""SELECT d.*, GROUP_CONCAT(ds.species_key) AS species
-                FROM docs d JOIN doc_species ds ON ds.pmid = d.pmid
-                WHERE d.pmid IN (SELECT pmid FROM doc_species WHERE species_key IN ({marks}))
-                GROUP BY d.pmid""",
-            species_keys,
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            """SELECT d.*, GROUP_CONCAT(ds.species_key) AS species
-               FROM docs d LEFT JOIN doc_species ds ON ds.pmid = d.pmid
-               GROUP BY d.pmid"""
-        ).fetchall()
-    return [_row_to_doc(r) for r in rows]
+        where.append(f"d.pmid IN (SELECT pmid FROM doc_species WHERE species_key IN ({','.join('?' * len(species_keys))}))")
+        args += list(species_keys)
+    if topic_keys:
+        where.append(f"d.pmid IN (SELECT pmid FROM doc_topic WHERE topic_key IN ({','.join('?' * len(topic_keys))}))")
+        args += list(topic_keys)
+    q = _DOC_SELECT + ((" WHERE " + " AND ".join(where)) if where else "")
+    return [_row_to_doc(r) for r in conn.execute(q, args).fetchall()]
 
 
 def docs_by_pmid(conn: sqlite3.Connection, pmids: list[str]) -> dict[str, dict]:
     if not pmids:
         return {}
     marks = ",".join("?" * len(pmids))
-    rows = conn.execute(
-        f"""SELECT d.*, GROUP_CONCAT(ds.species_key) AS species
-            FROM docs d LEFT JOIN doc_species ds ON ds.pmid = d.pmid
-            WHERE d.pmid IN ({marks}) GROUP BY d.pmid""",
-        list(pmids),
-    ).fetchall()
+    rows = conn.execute(f"{_DOC_SELECT} WHERE d.pmid IN ({marks})", list(pmids)).fetchall()
     return {r["pmid"]: _row_to_doc(r) for r in rows}
 
 
-def count_docs(conn: sqlite3.Connection) -> int:
+def count_docs(conn: sqlite3.Connection, topic_keys: list[str] | None = None) -> int:
     """Unique abstracts. Summing count_docs_by_species double-counts papers about two species."""
+    if topic_keys:
+        marks = ",".join("?" * len(topic_keys))
+        return conn.execute(
+            f"SELECT COUNT(DISTINCT pmid) AS n FROM doc_topic WHERE topic_key IN ({marks})", list(topic_keys)
+        ).fetchone()["n"]
     return conn.execute("SELECT COUNT(*) AS n FROM docs").fetchone()["n"]
 
 
-def count_docs_by_species(conn: sqlite3.Connection) -> dict[str, int]:
-    rows = conn.execute(
-        "SELECT species_key, COUNT(*) AS n FROM doc_species GROUP BY species_key"
-    ).fetchall()
+def count_docs_by_species(conn: sqlite3.Connection, topic_keys: list[str] | None = None) -> dict[str, int]:
+    """Papers per species. Scoped to topics, the species are also limited to their panels:
+    a paper found by two topics carries both their species links, and counting an elephant
+    under `aging` because a cancer-resistance query also found that paper is just wrong."""
+    if topic_keys:
+        from . import topics as topics_mod
+
+        panel = topics_mod.species_for(list(topic_keys), conn)
+        if not panel:
+            return {}
+        marks = ",".join("?" * len(topic_keys))
+        sp_marks = ",".join("?" * len(panel))
+        rows = conn.execute(
+            f"""SELECT ds.species_key, COUNT(DISTINCT ds.pmid) AS n FROM doc_species ds
+                WHERE ds.pmid IN (SELECT pmid FROM doc_topic WHERE topic_key IN ({marks}))
+                  AND ds.species_key IN ({sp_marks})
+                GROUP BY ds.species_key""",
+            [*topic_keys, *panel],
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT species_key, COUNT(*) AS n FROM doc_species GROUP BY species_key").fetchall()
     return {r["species_key"]: r["n"] for r in rows}
+
+
+def count_docs_by_topic(conn: sqlite3.Connection) -> dict[str, int]:
+    rows = conn.execute("SELECT topic_key, COUNT(*) AS n FROM doc_topic GROUP BY topic_key").fetchall()
+    return {r["topic_key"]: r["n"] for r in rows}
+
+
+# --- topics: enabled set, custom topics, per-pair ingest state --------------------
+
+def get_setting(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
+    conn.commit()
+
+
+def enabled_topics(conn: sqlite3.Connection) -> list[str]:
+    raw = get_setting(conn, "enabled_topics")
+    if not raw:
+        return []
+    try:
+        val = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    return [str(x) for x in val] if isinstance(val, list) else []
+
+
+def set_enabled_topics(conn: sqlite3.Connection, keys: list[str]) -> None:
+    set_setting(conn, "enabled_topics", json.dumps(list(keys)))
+
+
+def custom_topic_rows(conn: sqlite3.Connection) -> list[str]:
+    try:
+        rows = conn.execute("SELECT spec_json FROM custom_topics ORDER BY created_at, key").fetchall()
+    except sqlite3.OperationalError:  # database from before custom topics existed
+        return []
+    return [r["spec_json"] for r in rows]
+
+
+def save_custom_topic(conn: sqlite3.Connection, key: str, spec_json: str) -> None:
+    conn.execute(
+        """INSERT INTO custom_topics (key, spec_json, created_at) VALUES (?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET spec_json = excluded.spec_json""",
+        (key, spec_json, now_iso()),
+    )
+    conn.commit()
+
+
+def delete_custom_topic(conn: sqlite3.Connection, key: str) -> bool:
+    cur = conn.execute("DELETE FROM custom_topics WHERE key = ?", (key,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def record_ingest(
+    conn: sqlite3.Connection,
+    topic_key: str,
+    species_key: str,
+    query: str,
+    n_pmids: int,
+    stored: int,
+    accumulate: bool = False,
+) -> None:
+    """Record that a (topic, species) pair was fetched.
+
+    `accumulate` is for the incremental re-check, which stores only what is new. A full
+    ingest replaces the count instead: adding to it made `--refresh` double every number.
+    """
+    stored_expr = "ingest_state.stored + excluded.stored" if accumulate else "excluded.stored"
+    conn.execute(
+        f"""INSERT INTO ingest_state (topic_key, species_key, query, n_pmids, stored, first_date, updated)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(topic_key, species_key) DO UPDATE SET
+             query = excluded.query, n_pmids = excluded.n_pmids,
+             stored = {stored_expr}, updated = excluded.updated""",
+        (topic_key, species_key, query, n_pmids, stored, today(), today()),
+    )
+    conn.commit()
+
+
+def forget_topic(conn: sqlite3.Connection, topic_key: str) -> int:
+    """Unlink a topic's papers and forget it was ingested. The abstracts themselves stay.
+
+    Deleting them would break the provenance of any card that cites one - the citation gate
+    checks a quote against the stored abstract - so a removed topic releases its links and
+    leaves the text alone.
+    """
+    n = conn.execute("DELETE FROM doc_topic WHERE topic_key = ?", (topic_key,)).rowcount
+    conn.execute("DELETE FROM ingest_state WHERE topic_key = ?", (topic_key,))
+    conn.commit()
+    return n
+
+
+def forget_ingest_state(conn: sqlite3.Connection, topic_key: str) -> int:
+    """Forget that a topic's pairs were fetched, so the next `cora setup` fetches them again.
+
+    Used when a topic's query changes: the stored abstracts were collected under the old
+    terms, and nothing else would ever notice.
+    """
+    n = conn.execute("DELETE FROM ingest_state WHERE topic_key = ?", (topic_key,)).rowcount
+    conn.commit()
+    return n
+
+
+def ingested_pairs(conn: sqlite3.Connection) -> set[tuple[str, str]]:
+    try:
+        rows = conn.execute("SELECT topic_key, species_key FROM ingest_state").fetchall()
+    except sqlite3.OperationalError:
+        return set()
+    return {(r["topic_key"], r["species_key"]) for r in rows}
 
 
 # --- events & logs -----------------------------------------------------------

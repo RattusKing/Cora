@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from . import config, db, generate, ledger, metrics, recheck
+from . import config, db, generate, ledger, metrics, recheck, topics
 from .card import export_draft, render_tight
 from .llm import get_llm
 
@@ -18,6 +18,7 @@ STATIC = Path(__file__).parent / "static"
 class AskBody(BaseModel):
     query: str
     species: list[str] | None = None
+    topics: list[str] | None = None
     mock: bool = False
     judge: bool = True  # False = mechanical pattern check only
     k: int | None = None
@@ -31,6 +32,10 @@ class FeedbackBody(BaseModel):
 class CheckinBody(BaseModel):
     useful: bool
     note: str | None = None
+
+
+class TopicsBody(BaseModel):
+    topics: list[str]
 
 
 def _doc_meta(conn, card) -> dict[str, dict]:
@@ -58,13 +63,52 @@ def create_app(db_path: str | None = None, recheck_runner=None) -> FastAPI:
         return (STATIC / "index.html").read_text(encoding="utf-8")
 
     @app.get("/api/species")
-    def species():
+    def species(topic: list[str] | None = Query(default=None)):
         from . import anage
 
         c = conn()
-        rows = anage.panel_summary(c)
+        try:
+            tks = topics.resolve(topic, c)
+        except topics.TopicError as e:
+            c.close()
+            raise HTTPException(status_code=400, detail=str(e))
+        rows = anage.panel_summary(c, topic_keys=tks)
         c.close()
-        return {"default": config.DEFAULT_SPECIES, "species": rows}
+        return {"default": [r["key"] for r in rows], "topics": tks, "species": rows}
+
+    @app.get("/api/topics")
+    def get_topics():
+        c = conn()
+        registry = topics.all_topics(c)
+        enabled = topics.resolve(None, c)
+        counts = db.count_docs_by_topic(c)
+        have = db.ingested_pairs(c)
+        out = [
+            {
+                "key": k, "name": t.name, "question": t.question, "status": t.status,
+                "builtin": t.builtin, "note": t.note, "species": list(t.species),
+                "mechanisms": list(t.mechanisms), "lineage_rank": t.lineage_rank,
+                "trait_source": t.trait_source, "docs": counts.get(k, 0),
+                "ingested_pairs": sum(1 for p in topics.pairs([k], None, c) if p in have),
+                "n_pairs": len(t.species), "enabled": k in enabled,
+            }
+            for k, t in registry.items()
+        ]
+        c.close()
+        return {"enabled": enabled, "topics": out}
+
+    @app.post("/api/topics")
+    def post_topics(body: TopicsBody):
+        c = conn()
+        try:
+            keys = topics.resolve(body.topics, c)
+        except topics.TopicError as e:
+            c.close()
+            raise HTTPException(status_code=400, detail=str(e))
+        db.set_enabled_topics(c, keys)
+        missing = [f"{t}/{s}" for t, s in topics.pairs(keys, None, c) if (t, s) not in db.ingested_pairs(c)]
+        c.close()
+        return {"enabled": keys, "not_ingested": missing}
 
     @app.post("/api/ask")
     def ask(body: AskBody):
@@ -76,7 +120,7 @@ def create_app(db_path: str | None = None, recheck_runner=None) -> FastAPI:
             c.close()
             raise HTTPException(status_code=503, detail=f"could not create model client: {e}")
         try:
-            card = generate.ask(c, body.query, species_keys=body.species, llm=llm, k=body.k, use_judge=body.judge)
+            card = generate.ask(c, body.query, species_keys=body.species, llm=llm, k=body.k, use_judge=body.judge, topic_keys=body.topics)
         except generate.NoEvidence as e:
             c.close()
             raise HTTPException(status_code=404, detail=str(e))
@@ -91,10 +135,10 @@ def create_app(db_path: str | None = None, recheck_runner=None) -> FastAPI:
         return out
 
     @app.get("/api/ledger")
-    def get_ledger(include_archived: bool = False, limit: int = 50):
+    def get_ledger(include_archived: bool = False, limit: int = 50, topic: list[str] | None = Query(default=None)):
         c = conn()
         metrics.record_open(c)
-        rows = ledger.list_cards(c, include_archived=include_archived, limit=limit)
+        rows = ledger.list_cards(c, include_archived=include_archived, limit=limit, topic_keys=topic)
         out = []
         for r in rows:
             card = r["card"]
@@ -149,9 +193,9 @@ def create_app(db_path: str | None = None, recheck_runner=None) -> FastAPI:
         return {"draft": text, "status": card.status}
 
     @app.get("/api/metrics")
-    def get_metrics():
+    def get_metrics(topic: list[str] | None = Query(default=None)):
         c = conn()
-        out = metrics.compute(c)
+        out = metrics.compute(c, topic_keys=topic)
         c.close()
         return out
 
@@ -163,14 +207,18 @@ def create_app(db_path: str | None = None, recheck_runner=None) -> FastAPI:
         return {"ok": True}
 
     @app.get("/api/graph/converge")
-    def get_converge(min_tier: str = "mention", min_lineages: int = 2, perms: int | None = None):
+    def get_converge(min_tier: str = "mention", min_lineages: int = 2, perms: int | None = None, topic: list[str] | None = Query(default=None)):
         from . import graph
 
         c = conn()
         if graph.findings_count(c) == 0:
             c.close()
             return {"rows": [], "text": "no findings yet - run `cora graph build`", "findings": 0}
-        rows = graph.converge(c, min_tier=min_tier, perms=perms)
+        try:
+            rows = graph.converge(c, min_tier=min_tier, perms=perms, topic_keys=topic)
+        except topics.TopicError as e:
+            c.close()
+            raise HTTPException(status_code=400, detail=str(e))
         out = {"rows": [r for r in rows if r["n_lineages"] >= min_lineages], "text": graph.render_convergence(rows, min_lineages=min_lineages), "findings": graph.findings_count(c)}
         c.close()
         return out

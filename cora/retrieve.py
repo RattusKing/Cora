@@ -47,7 +47,7 @@ class Index:
         return [(d, s) for d, s, _ in hits[:k]]
 
 
-def build_index(conn, species_keys: list[str] | None = None) -> Index:
+def build_index(conn, species_keys: list[str] | None = None, topic_keys: list[str] | None = None) -> Index:
     from . import db
 
-    return Index(db.get_docs(conn, species_keys))
+    return Index(db.get_docs(conn, species_keys, topic_keys))

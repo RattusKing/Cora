@@ -17,10 +17,10 @@ def insert(conn, card: Card) -> Card:
     ).fetchone()
     duplicate_of = dup["id"] if dup else None
     conn.execute(
-        """INSERT INTO ledger (id, created_at, query, card_json, dedupe_key, duplicate_of, state, groundedness, n_verified, n_species)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        """INSERT INTO ledger (id, created_at, topics, query, card_json, dedupe_key, duplicate_of, state, groundedness, n_verified, n_species)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            card.id, card.created_at, card.query, card.model_dump_json(), card.dedupe_key, duplicate_of,
+            card.id, card.created_at, json.dumps(card.topics), card.query, card.model_dump_json(), card.dedupe_key, duplicate_of,
             card.status, card.gate.groundedness, card.evidence_band.n_verified_quotes, card.evidence_band.n_species,
         ),
     )
@@ -41,30 +41,39 @@ def get_row(conn, card_id: str):
     return conn.execute("SELECT * FROM ledger WHERE id = ?", (card_id,)).fetchone()
 
 
-def list_cards(conn, include_archived: bool = False, limit: int = 50) -> list[dict]:
+def list_cards(conn, include_archived: bool = False, limit: int = 50, topic_keys: list[str] | None = None) -> list[dict]:
     """Ranked: verified species, then groundedness, then recency. Archived entries, cards
     whose pattern failed its check, and duplicates are demoted, never removed. Each row
     carries `new_evidence`: unseen touches from the re-check."""
+    # The limit is applied AFTER the topic and archive filters, not in SQL: ranking first
+    # and filtering second would hide a topic's cards behind other topics' higher-ranked
+    # ones, so `cora ledger --topic X` would show only those in the global top N.
     rows = conn.execute(
         """SELECT * FROM ledger
            ORDER BY (state = 'archived') ASC,
                     (state IN ('overclaim', 'unsupported', 'ungrounded')) ASC,
                     (duplicate_of IS NOT NULL) ASC,
-                    n_species DESC, groundedness DESC, n_verified DESC, created_at DESC
-           LIMIT ?""",
-        (limit,),
+                    n_species DESC, groundedness DESC, n_verified DESC, created_at DESC"""
     ).fetchall()
     unseen = db.unseen_update_counts(conn)
+    wanted = set(topic_keys) if topic_keys else None
     out = []
     for r in rows:
         if r["state"] == "archived" and not include_archived:
             continue
+        if wanted is not None:
+            # A card from before topics existed has none recorded: show it rather than hide it.
+            card_topics = set(json.loads(r["topics"])) if r["topics"] else set()
+            if card_topics and not (card_topics & wanted):
+                continue
         out.append(
             {
                 "card": _row_to_card(r), "state": r["state"], "duplicate_of": r["duplicate_of"],
                 "expanded": r["expanded"], "exported": r["exported"], "new_evidence": unseen.get(r["id"], 0),
             }
         )
+        if len(out) >= limit:
+            break
     return out
 
 

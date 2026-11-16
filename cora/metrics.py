@@ -16,7 +16,12 @@ def record_checkin(conn, useful: bool, note: str | None = None) -> None:
     db.log_event(conn, "checkin", {"useful": useful, "note": note})
 
 
-def compute(conn) -> dict:
+def compute(conn, topic_keys: list[str] | None = None) -> dict:
+    """System and user metrics. The *corpus* section follows the topics in play; the gate,
+    pattern-check and user sections are about Cora's behaviour and stay global."""
+    from . import topics as topics_mod
+
+    tks = topics_mod.resolve(topic_keys, conn)
     n_cards = conn.execute("SELECT COUNT(*) AS n FROM ledger").fetchone()["n"]
     n_grounded = conn.execute("SELECT COUNT(*) AS n FROM ledger WHERE n_verified > 0").fetchone()["n"]
     n_dupes = conn.execute("SELECT COUNT(*) AS n FROM ledger WHERE duplicate_of IS NOT NULL").fetchone()["n"]
@@ -29,7 +34,7 @@ def compute(conn) -> dict:
     exported = conn.execute("SELECT COUNT(*) AS n FROM ledger WHERE exported = 1").fetchone()["n"]
     expanded = conn.execute("SELECT COUNT(*) AS n FROM ledger WHERE expanded = 1").fetchone()["n"]
     checkins = [json.loads(r["payload"]) | {"at": r["created_at"][:10]} for r in conn.execute("SELECT payload, created_at FROM events WHERE kind='checkin' ORDER BY created_at").fetchall()]
-    docs = db.count_docs_by_species(conn)
+    docs = db.count_docs_by_species(conn, tks)
     p = conn.execute(
         """SELECT COUNT(*) AS n, COALESCE(SUM(judged),0) AS judged, COALESCE(SUM(passed),0) AS passed,
                   COALESCE(SUM(retried),0) AS retried, COALESCE(SUM(disagreement),0) AS disagreement
@@ -60,7 +65,13 @@ def compute(conn) -> dict:
         "pattern_check": pattern_stats,
         "recheck": recheck_stats,
         "graph": graph_stats,
-        "corpus": {"docs_by_species": docs, "total_docs": conn.execute("SELECT COUNT(*) AS n FROM docs").fetchone()["n"]},
+        "corpus": {
+            "topics": tks,
+            "docs_by_species": docs,
+            "docs_by_topic": db.count_docs_by_topic(conn),
+            "total_docs": db.count_docs(conn, tks),
+            "total_docs_all_topics": db.count_docs(conn),
+        },
         "cards": {"total": n_cards, "grounded": n_grounded, "duplicates": n_dupes},
         "gate": {
             "items": g["items"], "passed": g["passed"], "failed": g["failed"],

@@ -3,6 +3,7 @@ import json
 import pytest
 
 from cora import config, db, generate, ingest, ledger, metrics, recheck
+from cora import topics as cora_topics
 from cora.llm import MockLLM
 
 NEW_NMR = {
@@ -16,6 +17,12 @@ NEW_ROCKFISH = {
     "abstract": "Otolith trace-element chemistry in Sebastes species tracks depth and temperature across the lifespan. These signatures allow reconstruction of habitat use in long-lived rockfishes.",
 }
 SPECIES_PMIDS = {"naked_mole_rat": ["1000001", "1000002"], "ocean_quahog": ["2000001", "2000002"], "rockfish": ["3000001", "3000002"]}
+TOPIC = "aging"  # the fixture corpus is the aging panel
+
+
+def _species_of(tag):
+    """Snapshot tags are "<topic>_<species>"; the flags re-fetch keeps the tag "flags"."""
+    return tag[len(TOPIC) + 1:] if tag.startswith(TOPIC + "_") else tag
 
 
 class Fake:
@@ -36,7 +43,7 @@ class Fake:
         self.fetched.append(list(pmids))
         if tag == "flags":
             return [{"pmid": p, "title": "", "abstract": "", "flags": self.flags.get(p, [])} for p in pmids]
-        docs = [dict(d) for d in self.new.get(tag, []) if d["pmid"] in pmids]
+        docs = [dict(d) for d in self.new.get(_species_of(tag), []) if d["pmid"] in pmids]
         for d in docs:
             d["retrieved_at"] = "2026-09-20T00:00:00+00:00"
             d["flags"] = self.flags.get(d["pmid"], [])
@@ -61,8 +68,8 @@ def test_first_recheck_finds_new_abstracts_touches_cards_and_flags_sources(conn,
 
     report = recheck.run(conn, search_fn=fake.search, fetch_fn=fake.fetch, log=lambda *a, **k: None)
 
-    assert report.n_new == 2 and report.n_gone == 0
-    assert report.species["naked_mole_rat"]["new"] == 1 and report.species["rockfish"]["new"] == 1
+    assert report.n_new == 2 and report.n_gone == 0 and report.topics == ["aging"]
+    assert report.species["aging/naked_mole_rat"]["new"] == 1 and report.species["aging/rockfish"]["new"] == 1
     # the new NMR abstract touches the NMR card, not the rockfish card; the rockfish one touches the rockfish card
     touched = {(t.card_id, t.pmid) for t in report.touches}
     assert (card.id, "1000009") in touched and (other.id, "1000009") not in touched
@@ -81,7 +88,7 @@ def test_first_recheck_finds_new_abstracts_touches_cards_and_flags_sources(conn,
     assert rows[card.id]["new_evidence"] == 2  # new abstract + source flag
     # manifest and log updated
     m = json.loads((paths / "manifest.json").read_text())
-    assert "1000009" in m["species"]["naked_mole_rat"]["pmids"] and m["runs"][-1]["kind"] == "recheck"
+    assert "1000009" in m["pairs"]["aging/naked_mole_rat"]["pmids"] and m["runs"][-1]["kind"] == "recheck"
     assert recheck.last_report(conn).n_new == 2
     assert metrics.compute(conn)["recheck"]["runs"] == 1
 
@@ -115,7 +122,7 @@ def test_gone_pmids_are_counted_not_deleted(conn, paths):
         return [p for p in pm if p != "1000002"]
 
     report = recheck.run(conn, search_fn=search_missing_one, fetch_fn=Fake().fetch, log=lambda *a, **k: None)
-    assert report.n_gone == 1 and report.species["naked_mole_rat"]["gone"] == 1
+    assert report.n_gone == 1 and report.species["aging/naked_mole_rat"]["gone"] == 1
     assert db.docs_by_pmid(conn, ["1000002"])  # still stored
 
 
@@ -163,7 +170,28 @@ def test_rank_is_against_the_whole_species_corpus_not_just_new_docs(conn):
 
 def test_known_pmids_falls_back_to_db_without_manifest(conn):
     assert ingest.known_pmids(conn, "rockfish", None) == {"3000001", "3000002"}
+    # a pre-topics manifest keyed by species is still read, for the aging topic
     assert ingest.known_pmids(conn, "rockfish", {"species": {"rockfish": {"pmids": ["x"]}}}) == {"x"}
+    # ... and a pair entry wins over it
+    manifest = {"species": {"rockfish": {"pmids": ["x"]}}, "pairs": {"aging/rockfish": {"pmids": ["y"]}}}
+    assert ingest.known_pmids(conn, "rockfish", manifest) == {"y"}
+    # a different topic does not inherit the legacy aging list
+    assert ingest.known_pmids(conn, "rockfish", {"species": {"rockfish": {"pmids": ["x"]}}}, "regeneration") == set()
+
+
+def test_recheck_only_touches_the_pairs_of_the_enabled_topics(conn, paths):
+    """A hibernation species is not searched while only aging is enabled."""
+    seen: list[str] = []
+
+    def search(term):
+        seen.append(term)
+        return Fake().search(term)
+
+    recheck.run(conn, search_fn=search, fetch_fn=Fake().fetch, log=lambda *a, **k: None)
+    aging = cora_topics.BUILTIN["aging"]
+    assert len(seen) == len(aging.species)  # one query per aging species, and no more
+    assert all("hibernat" not in term and "torpor" not in term for term in seen)
+    assert all(config.SPECIES["ground_squirrel"].query not in term for term in seen)
 
 
 def test_show_marks_updates_seen(conn, paths):
@@ -174,3 +202,20 @@ def test_show_marks_updates_seen(conn, paths):
     ledger.mark_expanded(conn, card.id)
     assert ledger.list_cards(conn)[0]["new_evidence"] == 0
     assert db.card_updates(conn, card.id)[0]["seen"] == 1
+
+
+def test_a_recheck_only_considers_cards_of_the_topics_it_checks(conn, paths):
+    """A new paper found under one topic must not touch another topic's card."""
+    aging_card = _card(conn)  # topics == ["aging"] via the fixture's enabled topic
+    assert aging_card.topics == ["aging"]
+    db.set_enabled_topics(conn, ["hypoxia"])
+    fake = Fake(new={"naked_mole_rat": [NEW_NMR]}, flags={"1000001": ["ErratumIn:1000099"]})
+
+    report = recheck.run(conn, search_fn=fake.search, fetch_fn=fake.fetch, log=lambda *a, **k: None)
+
+    assert report.topics == ["hypoxia"] and report.n_cards_live == 0
+    assert report.touches == [] and report.flags == []  # the aging card is out of scope
+    # ... and the same run with aging enabled does touch it
+    db.set_enabled_topics(conn, ["aging"])
+    second = recheck.run(conn, search_fn=fake.search, fetch_fn=fake.fetch, log=lambda *a, **k: None)
+    assert second.n_cards_live == 1 and any(t.card_id == aging_card.id for t in second.touches)

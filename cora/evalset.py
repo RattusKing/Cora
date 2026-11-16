@@ -91,10 +91,13 @@ def build_verifier_candidates(docs: list[dict], n: int = 60, seed: int = 7) -> l
     return out[:n]
 
 
-def write_verifier_candidates(conn, n: int = 60, out: str | Path = "eval/verifier_gold_candidates.jsonl") -> Path:
-    docs = db.get_docs(conn)
+def write_verifier_candidates(conn, n: int = 60, out: str | Path = "eval/verifier_gold_candidates.jsonl", topic_keys: list[str] | None = None) -> Path:
+    from . import topics
+
+    tks = topics.resolve(topic_keys, conn)
+    docs = db.get_docs(conn, topic_keys=tks)
     if not docs:
-        raise SystemExit("no documents in the corpus - run `cora ingest` first")
+        raise SystemExit(f"no documents for {', '.join(tks)} - run `cora setup` first")
     rows = build_verifier_candidates(docs, n=n)
     path = Path(out)
     path.parent.mkdir(parents=True, exist_ok=True)
